@@ -1,10 +1,4 @@
 #!/usr/bin/env python3
-"""
-NEV GCS — 스테이션 모듈.
-
-조이스틱 입력을 읽어 서버(nev_remote_server)의 Zenoh 라우터로 전송.
-웹 UI 없음 — 브라우저는 서버에 직접 접속.
-"""
 import argparse
 import asyncio
 import logging
@@ -29,7 +23,9 @@ def load_config(path: str, overrides: dict) -> dict:
     p = Path(path)
     if p.exists():
         cfg = yaml.safe_load(p.read_text()) or {}
-    cfg.update({k: v for k, v in overrides.items() if v is not None})
+    for k, v in overrides.items():
+        if v is not None:
+            cfg[k] = v
     return cfg
 
 
@@ -58,19 +54,16 @@ async def run(cfg: dict):
 
 def main():
     parser = argparse.ArgumentParser(description='NEV GCS Station')
-    parser.add_argument('--config',         default='config.yaml')
+    parser.add_argument('--config', default='config.yaml')
     parser.add_argument('--server-locator', default=None)
     args = parser.parse_args()
 
-    cfg = load_config(args.config, {
-        'server_zenoh_locator': args.server_locator,
-    })
+    cfg = load_config(args.config, {'server_zenoh_locator': args.server_locator})
 
     try:
         asyncio.run(run(cfg))
     except KeyboardInterrupt:
         logger.info('Stopped by user')
-
 
 if __name__ == '__main__':
     main()

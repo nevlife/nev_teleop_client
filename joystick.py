@@ -1,26 +1,3 @@
-"""
-Joystick input handler.
-
-일반적인 게임패드 기준 축 배치:
-  axis 0 : 왼쪽 스틱 X  ← raw_steer  표시용
-  axis 1 : 왼쪽 스틱 Y  ← linear_x  제어
-  axis 3 : 오른쪽 스틱 X ← steering_angle 제어 (→ angular_z 자리로 전송)
-  axis 4 : 오른쪽 스틱 Y ← raw_speed 표시용
-
-오른쪽 스틱 X → 조향각(rad) 변환 후 TC 패킷의 angular_z 자리로 전송.
-max_steer_deg 로 최대 조향각 설정.
-
-Config keys:
-  axis_speed     : linear_x 축          (default 1, 왼쪽 스틱 Y)
-  axis_steer     : 조향각 축            (default 3, 오른쪽 스틱 X)
-  axis_raw_speed : raw_speed 표시 축    (default 4, 오른쪽 스틱 Y)
-  axis_raw_steer : raw_steer 표시 축    (default 0, 왼쪽 스틱 X)
-  btn_estop      : e-stop 토글 버튼     (default 4)
-  max_speed      : 최대 속도 m/s        (default 1.0)
-  max_steer_deg  : 최대 조향각 (도)     (default 27.0)
-  deadzone       : 축 데드존            (default 0.05)
-  invert_speed   : 속도 축 반전         (default True)
-"""
 import math
 import time
 import threading
@@ -42,14 +19,13 @@ except ImportError:
 class JoystickHandler:
     def __init__(self, state: StationState, cfg: dict):
         self.state          = state
-        self.axis_speed     = cfg.get('axis_speed',     1)   # 왼쪽 스틱 Y
-        self.axis_steer     = cfg.get('axis_steer',     3)   # 오른쪽 스틱 X
-        self.axis_raw_speed = cfg.get('axis_raw_speed', 4)   # 오른쪽 스틱 Y (표시용)
-        self.axis_raw_steer = cfg.get('axis_raw_steer', 0)   # 왼쪽 스틱 X  (표시용)
+        self.axis_speed     = cfg.get('axis_speed',     1)
+        self.axis_steer     = cfg.get('axis_steer',     3)
+        self.axis_raw_speed = cfg.get('axis_raw_speed', 4)
+        self.axis_raw_steer = cfg.get('axis_raw_steer', 0)
         self.btn_estop      = cfg.get('btn_estop',      4)
         self.max_speed      = cfg.get('max_speed',      1.0)
         self.max_steer      = math.radians(cfg.get('max_steer_deg', 27.0))
-        self.wheelbase      = cfg.get('wheelbase',      0.650)  # Hunter V2
         self.deadzone       = cfg.get('deadzone',       0.05)
         self.invert_speed   = cfg.get('invert_speed',   True)
 
@@ -82,8 +58,6 @@ class JoystickHandler:
     def set_loop(self, loop):
         self._loop = loop
 
-    # ------------------------------------------------------------------
-
     def _run(self):
         pygame.init()
         pygame.joystick.init()
@@ -95,7 +69,6 @@ class JoystickHandler:
                     time.sleep(1.0)
                 continue
 
-            # event.pump() 실패 = 하드웨어 단절. 나머지 오류와 분리.
             try:
                 pygame.event.pump()
             except pygame.error as e:
@@ -108,46 +81,36 @@ class JoystickHandler:
                 self._on_disconnect()
                 continue
 
-            # 속도: 왼쪽 스틱 Y → linear_x (직접 매핑)
             speed_raw = self._apply_deadzone(self._joystick.get_axis(self.axis_speed))
             if self.invert_speed:
                 speed_raw = -speed_raw
             self.state.linear_x = speed_raw * self.max_speed
             print(f'speed_raw={speed_raw:.3f}  linear_x={self.state.linear_x:.4f} m/s')
 
-            # 조향: 오른쪽 스틱 X → 각속도(rad/s)로 변환 후 전송
-            # ω = linear_x * tan(조향각) / wheelbase
             steer_raw = self._apply_deadzone(self._joystick.get_axis(self.axis_steer))
-            steer_angle = -steer_raw * self.max_steer
-            if abs(steer_angle) < 1e-6:
-                self.state.angular_z = 0.0
+            self.state.steer_angle = -steer_raw * self.max_steer
+            print(f'steer_raw={steer_raw:.3f}  steer_angle={math.degrees(self.state.steer_angle):.1f}deg')
+
+            if self._has_raw_speed:
+                self.state.raw_speed = self._joystick.get_axis(self.axis_raw_speed)
             else:
-                self.state.angular_z = self.state.linear_x * math.tan(steer_angle) / self.wheelbase
-            print(f'steer_raw={steer_raw:.3f}  steer_angle={math.degrees(steer_angle):.1f}deg  angular_z={self.state.angular_z:.4f} rad/s')
+                self.state.raw_speed = 0.0
 
-            # 표시용 raw 축
-            self.state.raw_speed = (
-                self._joystick.get_axis(self.axis_raw_speed) if self._has_raw_speed else 0.0
-            )
-            self.state.raw_steer = (
-                self._joystick.get_axis(self.axis_raw_steer) if self._has_raw_steer else 0.0
-            )
+            if self._has_raw_steer:
+                self.state.raw_steer = self._joystick.get_axis(self.axis_raw_steer)
+            else:
+                self.state.raw_steer = 0.0
 
-            # E-stop 버튼
             if self._use_estop_btn:
                 btn = bool(self._joystick.get_button(self.btn_estop))
                 if btn and not self._prev_btn_estop:
                     self._toggle_estop()
                 self._prev_btn_estop = btn
 
-            # joystick_connected 변경 시 서버에 알림
             now = time.monotonic()
             if self._client and now - self._last_broadcast >= 0.05:
                 if self._loop:
-                    self._loop.call_soon_threadsafe(
-                        self._client.send_joystick_connected,
-                        self.state.joystick_connected
-                    )
+                    self._loop.call_soon_threadsafe(self._client.send_joystick_connected, self.state.joystick_connected)
                 self._last_broadcast = now
 
             time.sleep(0.02)  # 50 Hz
@@ -170,7 +133,6 @@ class JoystickHandler:
         self.state.joystick_connected = True
 
     def _validate_config(self, joy):
-        """접속 직후 한 번만 실행. 잘못된 axis/button 인덱스를 조기에 잡는다."""
         num_axes    = joy.get_numaxes()
         num_buttons = joy.get_numbuttons()
 
@@ -188,7 +150,6 @@ class JoystickHandler:
             )
             self.axis_steer = 0
 
-        # 표시용 축은 없어도 동작 — 경고만
         self._has_raw_speed = self.axis_raw_speed < num_axes
         self._has_raw_steer = self.axis_raw_steer < num_axes
         if not self._has_raw_speed:
@@ -208,10 +169,10 @@ class JoystickHandler:
     def _on_disconnect(self):
         self._joystick = None
         self.state.joystick_connected = False
-        self.state.linear_x  = 0.0
-        self.state.angular_z = 0.0
-        self.state.raw_speed = 0.0
-        self.state.raw_steer = 0.0
+        self.state.linear_x    = 0.0
+        self.state.steer_angle = 0.0
+        self.state.raw_speed   = 0.0
+        self.state.raw_steer   = 0.0
 
     def _apply_deadzone(self, value: float) -> float:
         if abs(value) < self.deadzone:

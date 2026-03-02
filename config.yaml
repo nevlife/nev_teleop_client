@@ -1,22 +1,15 @@
-# NEV GCS Station configuration
-
-# ── 서버 Zenoh 엔드포인트 ─────────────────────────────
-# 로컬 테스트: tcp/127.0.0.1:7447
-# 운용 시:    tcp/<서버_LAN_IP>:7447
 server_zenoh_locator: "tcp/127.0.0.1:7447"
 
-# ── Send rates ───────────────────────────────────────────
-heartbeat_rate:  5.0    # Hz — 서버에 station keepalive
-teleop_rate:    20.0    # Hz — 조이스틱 명령 전송
+heartbeat_rate: 5.0
+teleop_rate: 20.0
 
-# ── Joystick ─────────────────────────────────────────────
 joystick:
-  axis_speed:     1      # 왼쪽 스틱 Y  → linear_x  (제어)
-  axis_steer:     3      # 오른쪽 스틱 X → angular_z (제어)
-  axis_raw_speed: 1      # 오른쪽 스틱 Y → raw_speed (표시용)
-  axis_raw_steer: 3      # 왼쪽 스틱 X  → raw_steer (표시용)
-  btn_estop:      4      # shoulder button for e-stop toggle
-  max_speed:      1.0    # m/s
-  max_steer_deg:  27.0   # 최대 조향각 (도)
-  deadzone:       0.05
-  invert_speed:   true
+  axis_speed: 1
+  axis_steer: 3
+  axis_raw_speed: 1     # right stick y
+  axis_raw_steer: 3     # left stick x
+  btn_estop: 4          # shoulder button for e-stop toggle
+  max_speed: 1.0        # m/s
+  max_steer_deg: 27.0
+  deadzone: 0.05        # joystick deadzone
+  invert_speed: true    # invert speed axis (forward is negative on some controllers)
