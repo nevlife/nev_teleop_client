@@ -49,8 +49,7 @@ class StationClient:
     def send_heartbeat(self):
         self._publish('nev/station/heartbeat', {'ts': time.time(), 'seq': self._next_seq()})
 
-    def send_teleop(self, linear_x: float, steer_angle: float,
-                    raw_speed: float = 0.0, raw_steer: float = 0.0):
+    def send_teleop(self, linear_x: float, steer_angle: float, raw_speed: float = 0.0, raw_steer: float = 0.0):
         self._publish('nev/station/teleop', {
             'linear_x':    round(linear_x,    3),
             'steer_angle': round(steer_angle, 4),
