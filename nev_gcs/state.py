@@ -5,4 +5,4 @@ class StationState:
         self.raw_speed:          float = 0.0
         self.raw_steer:          float = 0.0
         self.estop:              bool  = False
-        self.joystick_connected: bool  = False
+        self.controller_connected: bool  = False

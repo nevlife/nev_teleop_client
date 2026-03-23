@@ -3,6 +3,8 @@ server_zenoh_locator: "tcp/127.0.0.1:7447"
 heartbeat_rate: 5.0
 teleop_rate: 20.0
 
+controller_type: joystick
+
 joystick:
   axis_speed: 1
   axis_steer: 3

@@ -2,13 +2,12 @@
 import argparse
 import asyncio
 import logging
-from pathlib import Path
 
-import yaml
-
-from station_state import StationState
-from station_client import StationClient, run_send_loop
-from joystick import JoystickHandler
+from nev_gcs.config import load_config
+from nev_gcs.state import StationState
+from nev_gcs.client import StationClient
+from nev_gcs.controller import create_controller
+from nev_gcs.send_loop import run_send_loop
 
 logging.basicConfig(
     level=logging.INFO,
@@ -16,17 +15,6 @@ logging.basicConfig(
     datefmt='%H:%M:%S',
 )
 logger = logging.getLogger('main')
-
-
-def load_config(path: str, overrides: dict) -> dict:
-    cfg = {}
-    p = Path(path)
-    if p.exists():
-        cfg = yaml.safe_load(p.read_text()) or {}
-    for k, v in overrides.items():
-        if v is not None:
-            cfg[k] = v
-    return cfg
 
 
 async def run(cfg: dict):
@@ -37,17 +25,16 @@ async def run(cfg: dict):
     client = StationClient()
     client.start(locator)
 
-    joystick = JoystickHandler(state, cfg.get('joystick', {}))
-    joystick.set_client(client)
-    joystick.set_loop(loop)
-    joystick.start()
+    controller = create_controller(state, cfg)
+    controller.setup(client, loop)
+    controller.start()
 
     logger.info(f'Station started → server: {locator or "auto-discovery"}')
 
     try:
         await run_send_loop(client, state, cfg)
     finally:
-        joystick.stop()
+        controller.stop()
         client.stop()
         logger.info('Shutdown complete')
 
