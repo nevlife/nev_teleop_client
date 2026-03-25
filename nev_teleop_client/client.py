@@ -9,7 +9,7 @@ logger = logging.getLogger(__name__)
 
 class StationClient:
     TOPICS = (
-        'nev/station/gcs_heartbeat',
+        'nev/station/client_heartbeat',
         'nev/station/teleop',
         'nev/station/estop',
         'nev/station/cmd_mode',
@@ -43,8 +43,8 @@ class StationClient:
         except Exception as e:
             logger.warning(f'zenoh put [{key}]: {e}')
 
-    def send_gcs_heartbeat(self):
-        self._publish('nev/station/gcs_heartbeat', {
+    def send_client_heartbeat(self):
+        self._publish('nev/station/client_heartbeat', {
             'ts': time.time(),
         })
 

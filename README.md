@@ -1,4 +1,4 @@
-# NEV GCS
+# NEV Teleop Client
 
 NEV 차량 원격 조종 클라이언트.
 
@@ -9,10 +9,10 @@ NEV 차량 원격 조종 클라이언트.
 ```
 main.py                      # 진입점
 config.yaml                  # 설정 파일
-nev_gcs/
+nev_teleop_client/
 ├── state.py                 # 공유 상태 (linear_x, steer_angle, ...)
 ├── client.py                # Zenoh 퍼블리셔
-├── send_loop.py             # async 전송 루프 (gcs_heartbeat, teleop)
+├── send_loop.py             # async 전송 루프 (client_heartbeat, teleop)
 ├── config.py                # YAML 설정 로더
 └── controller/
     ├── base.py              # Controller ABC
@@ -56,7 +56,7 @@ joystick:
 
 | 토픽 | 주기 | 내용 |
 |------|------|------|
-| `nev/station/gcs_heartbeat` | 5 Hz | `{ts}` |
+| `nev/station/client_heartbeat` | 5 Hz | `{ts}` |
 | `nev/station/teleop` | 20 Hz | `{linear_x, steer_angle, raw_speed, raw_steer}` |
 | `nev/station/controller_heartbeat` | 20 Hz | `{connected}` |
 | `nev/station/estop` | 이벤트 | `{active}` |

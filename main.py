@@ -3,11 +3,11 @@ import argparse
 import asyncio
 import logging
 
-from nev_gcs.config import load_config
-from nev_gcs.state import StationState
-from nev_gcs.client import StationClient
-from nev_gcs.controller import create_controller
-from nev_gcs.send_loop import run_send_loop
+from nev_teleop_client.config import load_config
+from nev_teleop_client.state import StationState
+from nev_teleop_client.client import StationClient
+from nev_teleop_client.controller import create_controller
+from nev_teleop_client.send_loop import run_send_loop
 
 logging.basicConfig(
     level=logging.INFO,
@@ -40,7 +40,7 @@ async def run(cfg: dict):
 
 
 def main():
-    parser = argparse.ArgumentParser(description='NEV GCS Station')
+    parser = argparse.ArgumentParser(description='NEV Teleop Client')
     parser.add_argument('--config', default='config.yaml')
     parser.add_argument('--server-locator', default=None)
     args = parser.parse_args()

@@ -16,7 +16,7 @@ async def run_send_loop(client: StationClient, state: StationState, cfg: dict):
         now = time.monotonic()
 
         if now - last_hb >= hb_interval:
-            client.send_gcs_heartbeat()
+            client.send_client_heartbeat()
             last_hb = now
 
         if now - last_tc >= tc_interval:
