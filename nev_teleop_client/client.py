@@ -6,6 +6,14 @@ import zenoh
 
 logger = logging.getLogger(__name__)
 
+_TOPIC_QOS = {
+    'nev/station/client_heartbeat':     dict(reliability=zenoh.Reliability.BEST_EFFORT,  congestion_control=zenoh.CongestionControl.DROP,  priority=zenoh.Priority.DATA_LOW),
+    'nev/station/teleop':               dict(reliability=zenoh.Reliability.BEST_EFFORT,  congestion_control=zenoh.CongestionControl.DROP,  priority=zenoh.Priority.INTERACTIVE_HIGH),
+    'nev/station/estop':                dict(reliability=zenoh.Reliability.RELIABLE,     congestion_control=zenoh.CongestionControl.BLOCK, priority=zenoh.Priority.REAL_TIME),
+    'nev/station/cmd_mode':             dict(reliability=zenoh.Reliability.RELIABLE,     congestion_control=zenoh.CongestionControl.BLOCK, priority=zenoh.Priority.INTERACTIVE_HIGH),
+    'nev/station/controller_heartbeat': dict(reliability=zenoh.Reliability.BEST_EFFORT,  congestion_control=zenoh.CongestionControl.DROP,  priority=zenoh.Priority.BACKGROUND),
+}
+
 
 class StationClient:
     TOPICS = (
@@ -27,7 +35,7 @@ class StationClient:
         self._session = zenoh.open(conf)
 
         for key in self.TOPICS:
-            self._pubs[key] = self._session.declare_publisher(key)
+            self._pubs[key] = self._session.declare_publisher(key, **_TOPIC_QOS[key])
 
         logger.info(f'StationClient started → {locator or "auto-discovery"}')
 
