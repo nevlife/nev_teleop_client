@@ -1,3 +1,5 @@
 zenoh
 pygame
 PyYAML
+PySide6
+PyGObject
