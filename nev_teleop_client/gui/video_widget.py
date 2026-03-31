@@ -4,9 +4,12 @@ GStreamer H.265 video decoder widget for Qt.
 Receives H.265 NAL units from Zenoh (nev/gcs/camera) and decodes them
 using NVIDIA nvh265dec (hardware) with fallback to avdec_h265 (software).
 
-Frame format from server: [8B timestamp (double)] [2B encode_ms (uint16)] [NAL bytes]
+Relay header from server (20B):
+  vehicle_ts    (8B double)  — time.time() at vehicle encoding
+  encode_ms     (2B uint16)  — encoding latency ms
+  server_rx_ts  (8B double)  — time.time() at server reception
+  veh_to_srv_ms (2B uint16)  — vehicle→server delay ms
 """
-import json
 import logging
 import struct
 import threading
@@ -18,20 +21,24 @@ gi.require_version('GstVideo', '1.0')
 from gi.repository import Gst, GLib
 
 import zenoh
-import numpy as np
-from PySide6.QtCore import Qt, Signal, QTimer
+from PySide6.QtCore import Qt, Signal
 from PySide6.QtGui import QImage, QPixmap
 from PySide6.QtWidgets import QWidget, QVBoxLayout, QLabel
 
 logger = logging.getLogger(__name__)
 
-CAMERA_HEADER_BYTES = 10  # double(8) + uint16(2)
+RELAY_HEADER_FMT  = 'dHdH'  # vehicle_ts + encode_ms + server_rx_ts + veh_to_srv_ms
+RELAY_HEADER_SIZE = struct.calcsize(RELAY_HEADER_FMT)  # 20
+
+
+def _ms(a: float, b: float) -> str:
+    return f'{(b - a) * 1000:.1f}ms'
 
 
 class VideoWidget(QWidget):
     """Displays H.265 video from Zenoh via GStreamer hardware decoding."""
 
-    frame_ready = Signal(QImage)
+    frame_ready = Signal(bytes, int, int)
 
     def __init__(self, parent=None):
         super().__init__(parent)
@@ -45,10 +52,19 @@ class VideoWidget(QWidget):
         self._rx_bytes = 0
         self._frame_count = 0
         self._last_stats_time = time.time()
-        self._video_delay_ms = 0.0
         self._encode_ms = 0.0
+        self._veh_to_srv_ms = 0.0
+        self._srv_to_cli_ms = 0.0
+        self._decode_ms = 0.0
+        self._frame_size_sum = 0
+        self._frame_size_count = 0
+        self._frame_size_avg = 0
         self._bw_mbps = 0.0
         self._fps = 0.0
+
+        # Decode latency: PTS → perf_counter at push time
+        self._decode_pts_map = {}
+        self._decode_pts_seq = 0
 
         self._label = QLabel()
         self._label.setAlignment(Qt.AlignmentFlag.AlignCenter)
@@ -82,7 +98,7 @@ class VideoWidget(QWidget):
     def _init_pipeline(self):
         # Try hardware decoder first, fallback to software
         pipeline_str = (
-            'appsrc name=src format=time is-live=true do-timestamp=true '
+            'appsrc name=src format=time is-live=true do-timestamp=false '
             'caps="video/x-h265,stream-format=byte-stream,alignment=au" ! '
             'h265parse ! '
             'nvh265dec ! '
@@ -95,7 +111,7 @@ class VideoWidget(QWidget):
             logger.info('Using NVIDIA hardware H.265 decoder (nvh265dec)')
         except GLib.Error:
             pipeline_str = (
-                'appsrc name=src format=time is-live=true do-timestamp=true '
+                'appsrc name=src format=time is-live=true do-timestamp=false '
                 'caps="video/x-h265,stream-format=byte-stream,alignment=au" ! '
                 'h265parse ! '
                 'avdec_h265 ! '
@@ -107,7 +123,7 @@ class VideoWidget(QWidget):
             logger.info('Using software H.265 decoder (avdec_h265)')
 
         self._appsrc = self._pipeline.get_by_name('src')
-        self._appsrc.set_property('max-bytes', 1024 * 1024 * 4)
+        self._appsrc.set_property('max-bytes', 1024 * 512)
         self._appsrc.set_property('block', False)
 
         sink = self._pipeline.get_by_name('sink')
@@ -122,30 +138,55 @@ class VideoWidget(QWidget):
             return
         try:
             raw = bytes(sample.payload)
-            if len(raw) <= CAMERA_HEADER_BYTES:
+            if len(raw) <= RELAY_HEADER_SIZE:
                 return
-            ts, encode_ms = struct.unpack_from('dH', raw, 0)
-            nal = raw[CAMERA_HEADER_BYTES:]
+            vehicle_ts, encode_ms, server_rx_ts, veh_to_srv_ms = struct.unpack_from(
+                RELAY_HEADER_FMT, raw, 0,
+            )
+            nal = raw[RELAY_HEADER_SIZE:]
+            now = time.time()
+            srv_to_cli_ms = max(0.0, (now - server_rx_ts) * 1000.0)
 
-            video_delay_ms = (time.time() - ts) * 1000.0
-
+            nal_len = len(nal)
             with self._lock:
-                self._rx_bytes += len(nal)
-                self._video_delay_ms = video_delay_ms
+                self._rx_bytes += nal_len
                 self._encode_ms = encode_ms
+                self._veh_to_srv_ms = veh_to_srv_ms
+                self._srv_to_cli_ms = srv_to_cli_ms
+                self._frame_size_sum += nal_len
+                self._frame_size_count += 1
 
+            self._decode_pts_seq += 1
+            pts_ns = self._decode_pts_seq * 66_666_667  # ~15fps interval
+            self._decode_pts_map[pts_ns] = time.perf_counter()
             buf = Gst.Buffer.new_wrapped(nal)
+            buf.pts = pts_ns
+            buf.dts = pts_ns
             self._appsrc.emit('push-buffer', buf)
         except Exception as e:
             logger.warning(f'Camera frame error: {e}')
 
     def _on_decoded_sample(self, sink):
         """GStreamer callback: decoded frame ready."""
+        t0 = time.perf_counter()
+
         sample = sink.emit('pull-sample')
         if not isinstance(sample, Gst.Sample):
             return Gst.FlowReturn.OK
 
         buf = sample.get_buffer()
+
+        # Measure decode latency via PTS correlation
+        decode_ms = 0.0
+        pts = buf.pts
+        push_time = self._decode_pts_map.pop(pts, None)
+        if push_time is not None:
+            decode_ms = (t0 - push_time) * 1000.0
+        # Clean up stale entries (dropped frames)
+        if len(self._decode_pts_map) > 30:
+            oldest_keys = sorted(self._decode_pts_map)[:len(self._decode_pts_map) - 10]
+            for k in oldest_keys:
+                del self._decode_pts_map[k]
         caps = sample.get_caps()
         struct_ = caps.get_structure(0)
         width = struct_.get_value('width')
@@ -154,26 +195,41 @@ class VideoWidget(QWidget):
         ok, map_info = buf.map(Gst.MapFlags.READ)
         if ok:
             try:
+                t1 = time.perf_counter()
                 data = bytes(map_info.data)
-                img = QImage(data, width, height, width * 3,
-                             QImage.Format.Format_RGB888).copy()
+                t2 = time.perf_counter()
                 with self._lock:
                     self._frame_count += 1
-                self.frame_ready.emit(img)
+                    if decode_ms > 0:
+                        self._decode_ms = decode_ms
+                self.frame_ready.emit(data, width, height)
+                t3 = time.perf_counter()
+                logger.debug(
+                    f'[decode] dec={decode_ms:.1f}ms pull={_ms(t0,t1)} copy={_ms(t1,t2)} emit={_ms(t2,t3)} total={_ms(t0,t3)}'
+                )
             finally:
                 buf.unmap(map_info)
 
         return Gst.FlowReturn.OK
 
-    def _update_frame(self, img: QImage):
+    def _update_frame(self, data: bytes, width: int, height: int):
         """Update display on Qt main thread."""
+        t0 = time.perf_counter()
+        img = QImage(data, width, height, width * 3, QImage.Format.Format_RGB888)
+        t1 = time.perf_counter()
         pixmap = QPixmap.fromImage(img)
+        t2 = time.perf_counter()
         scaled = pixmap.scaled(
             self._label.size(),
             Qt.AspectRatioMode.KeepAspectRatio,
-            Qt.TransformationMode.SmoothTransformation,
+            Qt.TransformationMode.FastTransformation,
         )
+        t3 = time.perf_counter()
         self._label.setPixmap(scaled)
+        t4 = time.perf_counter()
+        logger.debug(
+            f'[render] qimage={_ms(t0,t1)} pixmap={_ms(t1,t2)} scale={_ms(t2,t3)} set={_ms(t3,t4)} total={_ms(t0,t4)}'
+        )
 
     def get_stats(self) -> dict:
         """Return current video stats (call periodically from main thread)."""
@@ -183,12 +239,19 @@ class VideoWidget(QWidget):
             if dt > 0:
                 self._bw_mbps = round(self._rx_bytes * 8 / (dt * 1e6), 3)
                 self._fps = round(self._frame_count / dt, 1)
+            if self._frame_size_count > 0:
+                self._frame_size_avg = round(self._frame_size_sum / self._frame_size_count)
             self._rx_bytes = 0
             self._frame_count = 0
+            self._frame_size_sum = 0
+            self._frame_size_count = 0
             self._last_stats_time = now
             return {
                 'bw_mbps': self._bw_mbps,
                 'fps': self._fps,
-                'delay_ms': round(self._video_delay_ms, 1),
                 'encode_ms': self._encode_ms,
+                'veh_to_srv_ms': self._veh_to_srv_ms,
+                'srv_to_cli_ms': round(self._srv_to_cli_ms, 1),
+                'decode_ms': round(self._decode_ms, 1),
+                'frame_size': self._frame_size_avg,
             }

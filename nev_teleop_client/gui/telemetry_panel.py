@@ -223,28 +223,44 @@ class TelemetryPanel(QWidget):
     def _render_network(self, ns):
         connected = ns.get('connected', False)
         st_cls = GREEN if connected else RED
-        rtt = ns.get('ht_rtt', 0)
-        rtt_cls = _text_cls(rtt, 50, 100)
 
-        enc_d = ns.get('encode_delay', 0)
-        net_d = ns.get('video_net_delay', 0)
         tele_d = ns.get('tele_delay_ms', 0)
-        total = enc_d + net_d
+
+        # Video stats from local VideoWidget (per-frame measurement)
+        vs = getattr(self, '_video_stats', {})
+        v_enc   = vs.get('encode_ms', 0)
+        v2s     = vs.get('veh_to_srv_ms', 0)
+        s2c     = vs.get('srv_to_cli_ms', 0)
+        dec_d   = vs.get('decode_ms', 0)
+        cli_bw  = vs.get('bw_mbps', 0)
+        cli_fps = vs.get('fps', 0)
+        total_video = v_enc + v2s + s2c + dec_d
+
+        frame_size = vs.get('frame_size', 0)
+        frame_kb = f'{frame_size / 1024:.1f} KB' if frame_size > 0 else '—'
 
         sep = f'<div style="line-height:1.8;color:{MUTED};">─────</div>'
 
         self._body('NETWORK').setText(
             _kv('status', _dot_html(connected, st_cls) + (NS_CODES.get(ns.get('status_code', 2), '?')), st_cls) +
-            _kv('video tx', f'{ns.get("bw_video_tx", 0):.2f} Mbps' if ns.get('bw_video_tx', 0) > 0 else '—') +
-            _kv('video rx', f'{ns.get("bw_video_rx", 0):.2f} Mbps' if ns.get('bw_video_rx', 0) > 0 else '—') +
+            sep +
+            f'<div style="line-height:1.6;color:{MUTED};font-weight:bold;">VIDEO PIPELINE</div>' +
+            _kv('encode', f'{v_enc} ms') +
+            _kv('veh→srv', f'{v2s} ms') +
+            _kv('srv→cli', f'{s2c:.1f} ms') +
+            _kv('decode', f'{dec_d:.1f} ms') +
+            _kv('total', f'{total_video:.1f} ms') +
+            sep +
+            f'<div style="line-height:1.6;color:{MUTED};font-weight:bold;">VIDEO BANDWIDTH</div>' +
+            _kv('veh tx', f'{ns.get("bw_video_tx", 0):.2f} Mbps' if ns.get('bw_video_tx', 0) > 0 else '—') +
+            _kv('srv rx', f'{ns.get("bw_video_rx", 0):.2f} Mbps' if ns.get('bw_video_rx', 0) > 0 else '—') +
+            _kv('cli rx', f'{cli_bw:.2f} Mbps' if cli_bw > 0 else '—') +
+            _kv('frame size(s)', frame_kb) +
+            _kv('fps', f'{cli_fps:.1f}') +
+            sep +
+            f'<div style="line-height:1.6;color:{MUTED};font-weight:bold;">TELEMETRY</div>' +
             _kv('tele rx', f'{ns.get("bw_telemetry", 0):.2f} Mbps' if ns.get('bw_telemetry', 0) > 0 else '—') +
-            sep +
-            _kv('enc delay', f'{enc_d:.1f} ms' if enc_d > 0 else '—') +
-            _kv('net delay', f'{net_d:.1f} ms' if net_d > 0 else '—') +
-            _kv('total delay', f'{total:.1f} ms' if total > 0 else '—') +
-            sep +
-            _kv('tele delay', f'{tele_d:.1f} ms' if tele_d > 0 else '—') +
-            _kv('rtt', f'{rtt:.1f} ms', rtt_cls)
+            _kv('tele delay', f'{tele_d:.1f} ms' if tele_d > 0 else '—')
         )
 
     def _render_twist(self, tv):
