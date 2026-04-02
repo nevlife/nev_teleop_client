@@ -47,6 +47,8 @@ class VideoWidget(QWidget):
         self._frame_size_avg = 0
         self._bw_mbps = 0.0
         self._fps = 0.0
+        self._decode_max_ms = 0.0
+        self._render_max_ms = 0.0
 
         self._decode_pts_map = {}
         self._decode_pts_seq = 0
@@ -182,6 +184,8 @@ class VideoWidget(QWidget):
                     self._frame_count += 1
                     if decode_ms > 0:
                         self._decode_ms = decode_ms
+                        if decode_ms > self._decode_max_ms:
+                            self._decode_max_ms = decode_ms
                 self.frame_ready.emit(data, width, height)
                 t3 = time.perf_counter()
                 logger.debug(
@@ -206,6 +210,10 @@ class VideoWidget(QWidget):
         t3 = time.perf_counter()
         self._label.setPixmap(scaled)
         t4 = time.perf_counter()
+        render_ms = (t4 - t0) * 1000.0
+        with self._lock:
+            if render_ms > self._render_max_ms:
+                self._render_max_ms = render_ms
         logger.debug(
             f'[render] qimage={_ms(t0,t1)} pixmap={_ms(t1,t2)} scale={_ms(t2,t3)} set={_ms(t3,t4)} total={_ms(t0,t4)}'
         )
@@ -224,12 +232,17 @@ class VideoWidget(QWidget):
             self._frame_size_sum = 0
             self._frame_size_count = 0
             self._last_stats_time = now
-            return {
+            stats = {
                 'bw_mbps': self._bw_mbps,
                 'fps': self._fps,
                 'encode_ms': self._encode_ms,
                 'veh_to_srv_ms': self._veh_to_srv_ms,
                 'srv_to_cli_ms': round(self._srv_to_cli_ms, 1),
                 'decode_ms': round(self._decode_ms, 1),
+                'decode_max_ms': round(self._decode_max_ms, 1),
+                'render_max_ms': round(self._render_max_ms, 1),
                 'frame_size': self._frame_size_avg,
             }
+            self._decode_max_ms = 0.0
+            self._render_max_ms = 0.0
+            return stats
