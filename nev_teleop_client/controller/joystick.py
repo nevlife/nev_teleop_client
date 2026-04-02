@@ -69,17 +69,14 @@ class JoystickController(Controller):
 
         joy = self._joystick
 
-        # speed
         speed = self._apply_deadzone(joy.get_axis(self.axis_speed))
         if self.invert_speed:
             speed = -speed
         linear_x = speed * self.max_speed
 
-        # steer
         steer = self._apply_deadzone(joy.get_axis(self.axis_steer))
         steer_angle = -steer * self.max_steer
-        
-        # Atomic update to prevent torn reads in send_loop
+
         self.state.update_control(linear_x, steer_angle)
 
         return True
@@ -116,7 +113,6 @@ class JoystickController(Controller):
     def _toggle_estop(self):
         if self._client is None:
             return
-        # Atomic toggle to prevent race conditions
         new_val = self.state.toggle_estop()
         self._client.send_estop(new_val)
         logger.info(f'Joystick e-stop → {new_val}')

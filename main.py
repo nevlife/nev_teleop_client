@@ -1,10 +1,21 @@
 #!/usr/bin/env python3
+import os
+import sys
+
+# GStreamer 1.28 — must re-exec before any GStreamer libs are loaded
+_gst128 = '/opt/gst128/lib/x86_64-linux-gnu'
+if os.path.isdir(_gst128) and _gst128 not in os.environ.get('LD_LIBRARY_PATH', ''):
+    os.environ['LD_LIBRARY_PATH'] = f'{_gst128}:{os.environ.get("LD_LIBRARY_PATH", "")}'
+    os.environ['GST_PLUGIN_PATH'] = f'{_gst128}/gstreamer-1.0'
+    os.environ['GST_PLUGIN_SYSTEM_PATH'] = ''
+    os.environ['GST_PLUGIN_SCANNER'] = '/opt/gst128/libexec/gstreamer-1.0/gst-plugin-scanner'
+    os.execve(sys.executable, [sys.executable] + sys.argv, os.environ)
+
 import argparse
 import asyncio
 import json
 import logging
 import signal
-import sys
 import threading
 
 from PySide6.QtCore import QTimer

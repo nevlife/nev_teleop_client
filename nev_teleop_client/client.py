@@ -1,5 +1,6 @@
 import json
 import logging
+import threading
 import time
 
 import zenoh
@@ -12,6 +13,7 @@ _TOPIC_QOS = {
     'nev/station/estop':                dict(reliability=zenoh.Reliability.RELIABLE,     congestion_control=zenoh.CongestionControl.BLOCK, priority=zenoh.Priority.REAL_TIME),
     'nev/station/cmd_mode':             dict(reliability=zenoh.Reliability.RELIABLE,     congestion_control=zenoh.CongestionControl.BLOCK, priority=zenoh.Priority.INTERACTIVE_HIGH),
     'nev/station/controller_heartbeat': dict(reliability=zenoh.Reliability.BEST_EFFORT,  congestion_control=zenoh.CongestionControl.DROP,  priority=zenoh.Priority.BACKGROUND),
+    'nev/station/ping':                 dict(reliability=zenoh.Reliability.BEST_EFFORT,  congestion_control=zenoh.CongestionControl.DROP,  priority=zenoh.Priority.DATA_LOW),
 }
 
 
@@ -22,11 +24,16 @@ class StationClient:
         'nev/station/estop',
         'nev/station/cmd_mode',
         'nev/station/controller_heartbeat',
+        'nev/station/ping',
     )
 
     def __init__(self):
         self._session = None
         self._pubs: dict = {}
+        self._subs: list = []
+        self._rtt_lock = threading.Lock()
+        self._rtt_client_server_ms: float = 0.0
+        self._last_pong_time: float = 0.0
 
     def start(self, locator: str = '') -> None:
         conf = zenoh.Config()
@@ -41,9 +48,19 @@ class StationClient:
             self.stop()
             raise
 
+        self._subs = [
+            self._session.declare_subscriber('nev/gcs/station_pong', self._on_pong),
+        ]
+
         logger.info(f'StationClient started → {locator or "auto-discovery"}')
 
     def stop(self) -> None:
+        for sub in self._subs:
+            try:
+                sub.undeclare()
+            except Exception:
+                pass
+        self._subs.clear()
         for key, pub in self._pubs.items():
             try:
                 pub.undeclare()
@@ -84,6 +101,36 @@ class StationClient:
             'mode': mode,
         })
         logger.info(f'Cmd mode → {mode}')
+
+    def send_ping(self):
+        self._publish('nev/station/ping', {'ts': time.time()})
+
+    def _on_pong(self, sample):
+        try:
+            data = json.loads(bytes(sample.payload))
+            ts = data.get('ts')
+            if ts is None:
+                return
+            rtt_ms = (time.time() - ts) * 1000.0
+            if rtt_ms < 0:
+                return
+            with self._rtt_lock:
+                prev = self._rtt_client_server_ms
+                if prev > 0:
+                    smoothed = 0.7 * prev + 0.3 * rtt_ms
+                else:
+                    smoothed = rtt_ms
+                self._rtt_client_server_ms = round(smoothed, 1)
+                self._last_pong_time = time.monotonic()
+        except Exception as e:
+            logger.warning(f'pong parse error: {e}')
+
+    @property
+    def rtt_client_server_ms(self) -> float:
+        with self._rtt_lock:
+            if self._last_pong_time > 0 and (time.monotonic() - self._last_pong_time) > 3.0:
+                self._rtt_client_server_ms = 0.0
+            return self._rtt_client_server_ms
 
     def send_controller_heartbeat(self, connected: bool):
         self._publish('nev/station/controller_heartbeat', {

@@ -9,7 +9,6 @@ logger = logging.getLogger(__name__)
 
 
 class Controller(ABC):
-    """Poll-based controller that must run on the main thread (required by macOS/SDL)."""
 
     def __init__(self, state: StationState):
         self.state = state
@@ -23,7 +22,6 @@ class Controller(ABC):
         self._loop = loop
 
     def start(self):
-        """Blocking main-thread loop. Returns when stop() is called from another thread."""
         self._stop_event.clear()
         self._setup()
         logger.info(f'{self.name()} controller started')

@@ -1,9 +1,3 @@
-"""
-Telemetry side panel — mirrors the original web dashboard cards.
-
-Cards: HUNTER, MUX, NETWORK, TWIST, E-STOP, JOYSTICK, RESOURCES,
-       NET INTERFACES, DISK, ALERTS
-"""
 import json
 import logging
 import math
@@ -17,14 +11,12 @@ from PySide6.QtWidgets import (
 
 logger = logging.getLogger(__name__)
 
-# ── Constants ────────────────────────────────────────────────────────────────
 MODE_NAMES   = {-1: 'IDLE', 0: 'CTRL', 1: 'NAV', 2: 'REMOTE'}
 SRC_NAMES    = {-1: 'NONE', 0: 'NAV',  1: 'TELEOP'}
 NS_CODES     = {0: 'OK', 1: 'HB-DELAY', 2: 'SOCK-ERR'}
 BRIDGE_FLAGS = {0: 'OK', 1: 'SRV-CMD', 2: 'SOCK-ERR', 3: 'HB-TIMEOUT', 4: 'CTRL-TIMEOUT'}
 MUX_FLAGS    = {0: 'OK', 1: 'NAV+NO-TELEOP'}
 
-# ── Colors ───────────────────────────────────────────────────────────────────
 BG       = '#0d1117'
 BG_CARD  = '#161b22'
 BORDER   = '#21262d'
@@ -87,7 +79,6 @@ def _bar(pct):
 
 
 class TelemetryPanel(QWidget):
-    """Side panel with telemetry cards, matching the original web dashboard."""
 
     telemetry_updated = Signal(str)
 
@@ -112,7 +103,6 @@ class TelemetryPanel(QWidget):
         self._layout.setContentsMargins(0, 0, 0, 0)
         self._layout.setSpacing(1)
 
-        # Create card labels
         self._cards = {}
         for name in ['HUNTER', 'MUX', 'NETWORK', 'TWIST', 'E-STOP',
                       'JOYSTICK', 'RESOURCES', 'NET INTERFACES', 'DISK', 'ALERTS']:
@@ -126,6 +116,8 @@ class TelemetryPanel(QWidget):
         outer = QVBoxLayout(self)
         outer.setContentsMargins(0, 0, 0, 0)
         outer.addWidget(scroll)
+
+        self._rtt_client_server_ms = 0.0
 
         self.telemetry_updated.connect(self._refresh)
 
@@ -154,7 +146,6 @@ class TelemetryPanel(QWidget):
 
     def start(self, session: zenoh.Session):
         self._sub = session.declare_subscriber('nev/gcs/telemetry', self._on_telemetry)
-        # 시작 시 테스트 텍스트 표시
         self._body('ALERTS').setText('<span style="color:#3fb950;">Panel OK</span>')
         logger.info('TelemetryPanel started')
 
@@ -170,9 +161,10 @@ class TelemetryPanel(QWidget):
         except Exception as e:
             logger.warning(f'Telemetry parse error: {e}')
 
+    def update_rtt(self, rtt_ms: float):
+        self._rtt_client_server_ms = rtt_ms
+
     def update_video_stats(self, stats: dict):
-        """Called from main window with video widget stats."""
-        # Merged into network card via _refresh; store for next render
         self._video_stats = stats
 
     def _refresh(self, raw: str):
@@ -226,7 +218,6 @@ class TelemetryPanel(QWidget):
 
         tele_d = ns.get('tele_delay_ms', 0)
 
-        # Video stats from local VideoWidget (per-frame measurement)
         vs = getattr(self, '_video_stats', {})
         v_enc   = vs.get('encode_ms', 0)
         v2s     = vs.get('veh_to_srv_ms', 0)
@@ -260,7 +251,13 @@ class TelemetryPanel(QWidget):
             sep +
             f'<div style="line-height:1.6;color:{MUTED};font-weight:bold;">TELEMETRY</div>' +
             _kv('tele rx', f'{ns.get("bw_telemetry", 0):.2f} Mbps' if ns.get('bw_telemetry', 0) > 0 else '—') +
-            _kv('tele delay', f'{tele_d:.1f} ms' if tele_d > 0 else '—')
+            _kv('tele delay', f'{tele_d:.1f} ms' if tele_d > 0 else '—') +
+            sep +
+            f'<div style="line-height:1.6;color:{MUTED};font-weight:bold;">RTT</div>' +
+            _kv('cli\u2194srv', f'{self._rtt_client_server_ms:.1f} ms' if self._rtt_client_server_ms > 0 else '\u2014') +
+            _kv('srv\u2194bot', f'{ns.get("rtt_server_bot_ms", 0):.1f} ms' if ns.get('rtt_server_bot_ms', 0) > 0 else '\u2014') +
+            _kv('total RTT', f'{(self._rtt_client_server_ms + ns.get("rtt_server_bot_ms", 0)):.1f} ms'
+                 if (self._rtt_client_server_ms + ns.get('rtt_server_bot_ms', 0)) > 0 else '\u2014')
         )
 
     def _render_twist(self, tv):

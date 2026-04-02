@@ -1,11 +1,3 @@
-"""
-Main window for the NEV Teleop Client Qt application.
-
-Layout matches the original web dashboard:
-  [Top bar: title + badges + clock]
-  [Command bar: MODE buttons + E-STOP]
-  [Video (center) | Side panel (cards)]
-"""
 import logging
 import time
 
@@ -21,7 +13,6 @@ from .telemetry_panel import TelemetryPanel
 
 logger = logging.getLogger(__name__)
 
-# ── Colors (matching web dashboard) ──────────────────────────────────────────
 BG       = '#0d1117'
 BG_CARD  = '#161b22'
 BORDER   = '#21262d'
@@ -36,7 +27,6 @@ FONT     = "Consolas, 'Courier New', monospace"
 
 
 class Badge(QLabel):
-    """Status badge matching the web dashboard."""
 
     def __init__(self, text, parent=None):
         super().__init__(text, parent)
@@ -86,7 +76,6 @@ class MainWindow(QMainWindow):
         main_layout.setContentsMargins(0, 0, 0, 0)
         main_layout.setSpacing(0)
 
-        # ── Top bar ──────────────────────────────────────────────────────────
         topbar = QWidget()
         topbar.setFixedHeight(36)
         topbar.setStyleSheet(f'background:{BG}; border-bottom:1px solid {BORDER};')
@@ -111,7 +100,6 @@ class MainWindow(QMainWindow):
 
         main_layout.addWidget(topbar)
 
-        # ── Command bar ──────────────────────────────────────────────────────
         cmdbar = QWidget()
         cmdbar.setFixedHeight(38)
         cmdbar.setStyleSheet(f'background:{BG}; border-bottom:1px solid {BORDER};')
@@ -142,7 +130,6 @@ class MainWindow(QMainWindow):
 
         main_layout.addWidget(cmdbar)
 
-        # ── Main area: video + side panel ────────────────────────────────────
         content = QWidget()
         content_layout = QHBoxLayout(content)
         content_layout.setContentsMargins(0, 0, 0, 0)
@@ -162,7 +149,6 @@ class MainWindow(QMainWindow):
         main_layout.addWidget(content, stretch=1)
         self.setCentralWidget(central)
 
-        # ── Timers ───────────────────────────────────────────────────────────
         self._clock_timer = QTimer()
         self._clock_timer.timeout.connect(self._update_clock)
         self._clock_timer.start(1000)
@@ -171,7 +157,6 @@ class MainWindow(QMainWindow):
         self._stats_timer.timeout.connect(self._update_stats)
         self._stats_timer.start(1000)
 
-        # Connect telemetry updates for header/cmdbar
         self.telemetry_panel.telemetry_updated.connect(self._on_telemetry_raw)
 
     def start(self):
@@ -192,13 +177,14 @@ class MainWindow(QMainWindow):
     def _update_stats(self):
         stats = self.video_widget.get_stats()
         self.telemetry_panel.update_video_stats(stats)
+        if self._client:
+            self.telemetry_panel.update_rtt(self._client.rtt_client_server_ms)
 
     def _on_telemetry_raw(self, raw: str):
         import json
         s = json.loads(raw)
         self._last_state = s
 
-        # Update badges
         robot_age = s.get('robot_age', -1)
         if robot_age < 0:
             self._badge_veh.set_state('off')
@@ -212,14 +198,12 @@ class MainWindow(QMainWindow):
         self._badge_joy.set_state('ok' if ctrl.get('joystick_connected', False) else 'off')
         self._badge_rem.set_state('ok' if s.get('remote_enabled', False) else 'off')
 
-        # Update mode buttons
         active_mode = s.get('mux', {}).get('requested_mode', -1)
         station_on = s.get('station_connected', False)
         for mode_val, btn in self._mode_buttons.items():
             is_active = (mode_val == active_mode)
             btn.setStyleSheet(self._mode_btn_style(is_active, not station_on))
 
-        # Update E-STOP button
         estop_active = ctrl.get('estop', False) or s.get('estop', {}).get('is_estop', False)
         if estop_active:
             self._estop_btn.setText('\u25A0 RELEASE')

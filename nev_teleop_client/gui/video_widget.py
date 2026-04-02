@@ -1,15 +1,3 @@
-"""
-GStreamer H.265 video decoder widget for Qt.
-
-Receives H.265 NAL units from Zenoh (nev/gcs/camera) and decodes them
-using NVIDIA nvh265dec (hardware) with fallback to avdec_h265 (software).
-
-Relay header from server (20B):
-  vehicle_ts    (8B double)  — time.time() at vehicle encoding
-  encode_ms     (2B uint16)  — encoding latency ms
-  server_rx_ts  (8B double)  — time.time() at server reception
-  veh_to_srv_ms (2B uint16)  — vehicle→server delay ms
-"""
 import logging
 import struct
 import threading
@@ -27,8 +15,8 @@ from PySide6.QtWidgets import QWidget, QVBoxLayout, QLabel
 
 logger = logging.getLogger(__name__)
 
-RELAY_HEADER_FMT  = 'dHdH'  # vehicle_ts + encode_ms + server_rx_ts + veh_to_srv_ms
-RELAY_HEADER_SIZE = struct.calcsize(RELAY_HEADER_FMT)  # 20
+RELAY_HEADER_FMT  = 'dHdH'
+RELAY_HEADER_SIZE = struct.calcsize(RELAY_HEADER_FMT)
 
 
 def _ms(a: float, b: float) -> str:
@@ -36,7 +24,6 @@ def _ms(a: float, b: float) -> str:
 
 
 class VideoWidget(QWidget):
-    """Displays H.265 video from Zenoh via GStreamer hardware decoding."""
 
     frame_ready = Signal(bytes, int, int)
 
@@ -47,7 +34,6 @@ class VideoWidget(QWidget):
         self._sub = None
         self._running = False
 
-        # Stats
         self._lock = threading.Lock()
         self._rx_bytes = 0
         self._frame_count = 0
@@ -62,7 +48,6 @@ class VideoWidget(QWidget):
         self._bw_mbps = 0.0
         self._fps = 0.0
 
-        # Decode latency: PTS → perf_counter at push time
         self._decode_pts_map = {}
         self._decode_pts_seq = 0
 
@@ -80,7 +65,6 @@ class VideoWidget(QWidget):
         Gst.init(None)
 
     def start(self, session: zenoh.Session):
-        """Subscribe to camera topic and start decode pipeline."""
         self._sub = session.declare_subscriber('nev/gcs/camera', self._on_camera)
         self._init_pipeline()
         self._running = True
@@ -96,15 +80,15 @@ class VideoWidget(QWidget):
             self._pipeline = None
 
     def _init_pipeline(self):
-        # Try hardware decoder first, fallback to software
         pipeline_str = (
             'appsrc name=src format=time is-live=true do-timestamp=false '
             'caps="video/x-h265,stream-format=byte-stream,alignment=au" ! '
             'h265parse ! '
-            'nvh265dec ! '
+            'nvh265dec max-display-delay=0 ! '
+            'cudadownload ! '
             'videoconvert ! '
             'video/x-raw,format=RGB ! '
-            'appsink name=sink drop=true max-buffers=2 sync=false emit-signals=true'
+            'appsink name=sink drop=true max-buffers=1 sync=false emit-signals=true'
         )
         try:
             self._pipeline = Gst.parse_launch(pipeline_str)
@@ -117,7 +101,7 @@ class VideoWidget(QWidget):
                 'avdec_h265 ! '
                 'videoconvert ! '
                 'video/x-raw,format=RGB ! '
-                'appsink name=sink drop=true max-buffers=2 sync=false emit-signals=true'
+                'appsink name=sink drop=true max-buffers=1 sync=false emit-signals=true'
             )
             self._pipeline = Gst.parse_launch(pipeline_str)
             logger.info('Using software H.265 decoder (avdec_h265)')
@@ -133,7 +117,6 @@ class VideoWidget(QWidget):
         self._pipeline.set_state(Gst.State.PLAYING)
 
     def _on_camera(self, sample):
-        """Zenoh callback: receive H.265 NAL from server."""
         if not self._running or not self._appsrc:
             return
         try:
@@ -157,7 +140,7 @@ class VideoWidget(QWidget):
                 self._frame_size_count += 1
 
             self._decode_pts_seq += 1
-            pts_ns = self._decode_pts_seq * 66_666_667  # ~15fps interval
+            pts_ns = self._decode_pts_seq * 66_666_667
             self._decode_pts_map[pts_ns] = time.perf_counter()
             buf = Gst.Buffer.new_wrapped(nal)
             buf.pts = pts_ns
@@ -167,7 +150,6 @@ class VideoWidget(QWidget):
             logger.warning(f'Camera frame error: {e}')
 
     def _on_decoded_sample(self, sink):
-        """GStreamer callback: decoded frame ready."""
         t0 = time.perf_counter()
 
         sample = sink.emit('pull-sample')
@@ -176,13 +158,11 @@ class VideoWidget(QWidget):
 
         buf = sample.get_buffer()
 
-        # Measure decode latency via PTS correlation
         decode_ms = 0.0
         pts = buf.pts
         push_time = self._decode_pts_map.pop(pts, None)
         if push_time is not None:
             decode_ms = (t0 - push_time) * 1000.0
-        # Clean up stale entries (dropped frames)
         if len(self._decode_pts_map) > 30:
             oldest_keys = sorted(self._decode_pts_map)[:len(self._decode_pts_map) - 10]
             for k in oldest_keys:
@@ -213,7 +193,6 @@ class VideoWidget(QWidget):
         return Gst.FlowReturn.OK
 
     def _update_frame(self, data: bytes, width: int, height: int):
-        """Update display on Qt main thread."""
         t0 = time.perf_counter()
         img = QImage(data, width, height, width * 3, QImage.Format.Format_RGB888)
         t1 = time.perf_counter()
@@ -232,7 +211,6 @@ class VideoWidget(QWidget):
         )
 
     def get_stats(self) -> dict:
-        """Return current video stats (call periodically from main thread)."""
         now = time.time()
         with self._lock:
             dt = now - self._last_stats_time
