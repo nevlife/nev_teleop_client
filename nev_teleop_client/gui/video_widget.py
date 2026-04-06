@@ -27,12 +27,14 @@ class VideoWidget(QWidget):
 
     frame_ready = Signal(bytes, int, int)
 
-    def __init__(self, parent=None):
+    def __init__(self, codec='h264', hw_accel=True, parent=None):
         super().__init__(parent)
         self._pipeline = None
         self._appsrc = None
         self._sub = None
         self._running = False
+        self._codec = codec
+        self._hw_accel = hw_accel
 
         self._lock = threading.Lock()
         self._rx_bytes = 0
@@ -68,9 +70,9 @@ class VideoWidget(QWidget):
 
     def start(self, session: zenoh.Session):
         self._sub = session.declare_subscriber('nev/gcs/camera', self._on_camera)
-        self._init_pipeline()
+        self._init_pipeline(self._codec)
         self._running = True
-        logger.info('VideoWidget started')
+        logger.info(f'VideoWidget started (codec={self._codec})')
 
     def stop(self):
         self._running = False
@@ -80,33 +82,34 @@ class VideoWidget(QWidget):
         if self._pipeline:
             self._pipeline.set_state(Gst.State.NULL)
             self._pipeline = None
+            self._appsrc = None
+            self._codec = None
 
-    def _init_pipeline(self):
+    def _init_pipeline(self, codec: str):
+        if codec == 'h264':
+            caps = 'video/x-h264,stream-format=byte-stream,alignment=au'
+            if self._hw_accel:
+                parse_dec = 'h264parse ! nvh264dec max-display-delay=0 ! cudadownload'
+            else:
+                parse_dec = 'h264parse ! avdec_h264'
+        else:
+            caps = 'video/x-h265,stream-format=byte-stream,alignment=au'
+            if self._hw_accel:
+                parse_dec = 'h265parse ! nvh265dec max-display-delay=0 ! cudadownload'
+            else:
+                parse_dec = 'h265parse ! avdec_h265'
+
         pipeline_str = (
-            'appsrc name=src format=time is-live=true do-timestamp=false '
-            'caps="video/x-h265,stream-format=byte-stream,alignment=au" ! '
-            'h265parse ! '
-            'nvh265dec max-display-delay=0 ! '
-            'cudadownload ! '
-            'videoconvert ! '
-            'video/x-raw,format=RGB ! '
-            'appsink name=sink drop=true max-buffers=1 sync=false emit-signals=true'
+            f'appsrc name=src format=time is-live=true do-timestamp=false '
+            f'caps="{caps}" ! '
+            f'{parse_dec} ! '
+            f'videoconvert ! '
+            f'video/x-raw,format=RGB ! '
+            f'appsink name=sink drop=true max-buffers=1 sync=false emit-signals=true'
         )
-        try:
-            self._pipeline = Gst.parse_launch(pipeline_str)
-            logger.info('Using NVIDIA hardware H.265 decoder (nvh265dec)')
-        except GLib.Error:
-            pipeline_str = (
-                'appsrc name=src format=time is-live=true do-timestamp=false '
-                'caps="video/x-h265,stream-format=byte-stream,alignment=au" ! '
-                'h265parse ! '
-                'avdec_h265 ! '
-                'videoconvert ! '
-                'video/x-raw,format=RGB ! '
-                'appsink name=sink drop=true max-buffers=1 sync=false emit-signals=true'
-            )
-            self._pipeline = Gst.parse_launch(pipeline_str)
-            logger.info('Using software H.265 decoder (avdec_h265)')
+        self._pipeline = Gst.parse_launch(pipeline_str)
+        dec_type = 'HW' if self._hw_accel else 'SW'
+        logger.info(f'{codec.upper()} decoder ({dec_type})')
 
         self._appsrc = self._pipeline.get_by_name('src')
         self._appsrc.set_property('max-bytes', 1024 * 512)
@@ -119,7 +122,7 @@ class VideoWidget(QWidget):
         self._pipeline.set_state(Gst.State.PLAYING)
 
     def _on_camera(self, sample):
-        if not self._running or not self._appsrc:
+        if not self._running:
             return
         try:
             raw = bytes(sample.payload)
@@ -129,6 +132,7 @@ class VideoWidget(QWidget):
                 RELAY_HEADER_FMT, raw, 0,
             )
             nal = raw[RELAY_HEADER_SIZE:]
+
             now = time.time()
             srv_to_cli_ms = max(0.0, (now - server_rx_ts) * 1000.0)
 

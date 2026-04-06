@@ -1,5 +1,10 @@
 server_zenoh_locator: "tcp/127.0.0.1:7447"
 
+# Video codec: h264 or h265
+video_codec: "h264"
+# Hardware decoding (NVIDIA): true=nvh264dec/nvh265dec, false=avdec_h264/avdec_h265
+hw_accel: false
+
 heartbeat_rate: 5.0
 teleop_rate: 20.0
 ping_rate: 1.0

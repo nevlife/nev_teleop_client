@@ -135,7 +135,10 @@ class MainWindow(QMainWindow):
         content_layout.setContentsMargins(0, 0, 0, 0)
         content_layout.setSpacing(0)
 
-        self.video_widget = VideoWidget()
+        self.video_widget = VideoWidget(
+            codec=cfg.get('video_codec', 'h264'),
+            hw_accel=cfg.get('hw_accel', True),
+        )
         content_layout.addWidget(self.video_widget, stretch=1)
 
         separator = QWidget()
