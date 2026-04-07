@@ -15,7 +15,7 @@ from PySide6.QtWidgets import QWidget, QVBoxLayout, QLabel
 
 logger = logging.getLogger(__name__)
 
-RELAY_HEADER_FMT  = 'dHdH'
+RELAY_HEADER_FMT  = 'dfdf'
 RELAY_HEADER_SIZE = struct.calcsize(RELAY_HEADER_FMT)
 
 
@@ -137,12 +137,13 @@ class VideoWidget(QWidget):
             srv_to_cli_ms = max(0.0, (now - server_rx_ts) * 1000.0)
 
             nal_len = len(nal)
+            raw_len = len(raw)
             with self._lock:
-                self._rx_bytes += nal_len
+                self._rx_bytes += raw_len
                 self._encode_ms = encode_ms
                 self._veh_to_srv_ms = veh_to_srv_ms
                 self._srv_to_cli_ms = srv_to_cli_ms
-                self._frame_size_sum += nal_len
+                self._frame_size_sum += raw_len
                 self._frame_size_count += 1
 
             self._decode_pts_seq += 1

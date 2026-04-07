@@ -28,7 +28,7 @@ logging.basicConfig(
 )
 logger = logging.getLogger('video_viewer')
 
-RELAY_HEADER_FMT = 'dHdH'
+RELAY_HEADER_FMT = 'dfdf'
 RELAY_HEADER_SIZE = struct.calcsize(RELAY_HEADER_FMT)  # 20
 WINDOW_NAME = 'NEV Video'
 
