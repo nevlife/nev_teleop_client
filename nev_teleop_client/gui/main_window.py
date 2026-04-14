@@ -5,7 +5,12 @@ import zenoh
 from PySide6.QtCore import Qt, QTimer
 from PySide6.QtGui import QFont
 from PySide6.QtWidgets import (
-    QMainWindow, QWidget, QHBoxLayout, QVBoxLayout, QLabel, QPushButton,
+    QMainWindow,
+    QWidget,
+    QHBoxLayout,
+    QVBoxLayout,
+    QLabel,
+    QPushButton,
 )
 
 from .video_widget import VideoWidget
@@ -13,17 +18,17 @@ from .telemetry_panel import TelemetryPanel
 
 logger = logging.getLogger(__name__)
 
-BG       = '#0d1117'
-BG_CARD  = '#161b22'
-BORDER   = '#21262d'
-BORDER2  = '#30363d'
-TEXT     = '#c9d1d9'
-MUTED    = '#8b949e'
-GREEN    = '#3fb950'
-RED      = '#f85149'
-YELLOW   = '#d29922'
-BLUE     = '#58a6ff'
-FONT     = "Consolas, 'Courier New', monospace"
+BG = "#0d1117"
+BG_CARD = "#161b22"
+BORDER = "#21262d"
+BORDER2 = "#30363d"
+TEXT = "#c9d1d9"
+MUTED = "#8b949e"
+GREEN = "#3fb950"
+RED = "#f85149"
+YELLOW = "#d29922"
+BLUE = "#58a6ff"
+FONT = "Consolas, 'Courier New', monospace"
 
 
 class Badge(QLabel):
@@ -34,7 +39,7 @@ class Badge(QLabel):
         self.setAlignment(Qt.AlignmentFlag.AlignCenter)
         self.setFixedHeight(20)
         self.setMinimumWidth(36)
-        self.set_state('off')
+        self.set_state("off")
 
     def set_state(self, state, text=None):
         if text:
@@ -43,32 +48,36 @@ class Badge(QLabel):
             self.setText(self._base_text)
 
         colors = {
-            'ok':    (GREEN, GREEN),
-            'warn':  (YELLOW, YELLOW),
-            'error': (RED, RED),
-            'off':   (MUTED, BORDER2),
+            "ok": (GREEN, GREEN),
+            "warn": (YELLOW, YELLOW),
+            "error": (RED, RED),
+            "off": (MUTED, BORDER2),
         }
-        fg, border = colors.get(state, colors['off'])
+        fg, border = colors.get(state, colors["off"])
         self.setStyleSheet(
-            f'padding:1px 8px; border:1px solid {border}; border-radius:3px;'
-            f'font-size:11px; color:{fg}; background:transparent;'
+            f"padding:1px 8px; border:1px solid {border}; border-radius:3px;"
+            f"font-size:11px; color:{fg}; background:transparent;"
         )
 
 
 class MainWindow(QMainWindow):
 
-    def __init__(self, session: zenoh.Session, cfg: dict, client=None):
+    def __init__(self, session: zenoh.Session, cfg: dict, client=None, state=None):
         super().__init__()
         self._session = session
         self._cfg = cfg
         self._client = client
+        self._state = state
+        self._vehicle_id = cfg.get("vehicle_id", 0)
         self._last_state = {}
+        self._last_telemetry_time = 0.0
+        self._server_connected = False
 
-        self.setWindowTitle('NEV Teleop Client')
+        self.setWindowTitle("NEV Teleop Client")
         self.setMinimumSize(1280, 720)
         self.setStyleSheet(
-            f'QMainWindow {{ background:{BG}; }}'
-            f'QWidget {{ color:{TEXT}; font-family:{FONT}; font-size:12px; }}'
+            f"QMainWindow {{ background:{BG}; }}"
+            f"QWidget {{ color:{TEXT}; font-family:{FONT}; font-size:12px; }}"
         )
 
         central = QWidget()
@@ -78,40 +87,47 @@ class MainWindow(QMainWindow):
 
         topbar = QWidget()
         topbar.setFixedHeight(36)
-        topbar.setStyleSheet(f'background:{BG}; border-bottom:1px solid {BORDER};')
+        topbar.setStyleSheet(f"background:{BG}; border-bottom:1px solid {BORDER};")
         tb_layout = QHBoxLayout(topbar)
         tb_layout.setContentsMargins(12, 0, 12, 0)
 
-        title = QLabel('NEV CLIENT')
-        title.setStyleSheet(f'font-size:13px; font-weight:bold; letter-spacing:1px; color:{TEXT};')
+        title = QLabel("NEV CLIENT")
+        title.setStyleSheet(
+            f"font-size:13px; font-weight:bold; letter-spacing:1px; color:{TEXT};"
+        )
         tb_layout.addWidget(title)
         tb_layout.addStretch()
 
-        self._badge_veh = Badge('VEH')
-        self._badge_stas = Badge('STAS')
-        self._badge_joy = Badge('JOY')
-        self._badge_rem = Badge('REM')
-        for b in (self._badge_veh, self._badge_stas, self._badge_joy, self._badge_rem):
+        self._badge_srv = Badge("SRV")
+        self._badge_veh = Badge("VEH")
+        self._badge_stas = Badge("STAS")
+        self._badge_joy = Badge("JOY")
+        for b in (self._badge_srv, self._badge_veh, self._badge_stas, self._badge_joy):
             tb_layout.addWidget(b)
 
-        self._clock = QLabel('--:--:--')
-        self._clock.setStyleSheet(f'font-size:11px; color:{MUTED}; margin-left:8px;')
+        self._clock = QLabel("--:--:--")
+        self._clock.setStyleSheet(f"font-size:11px; color:{MUTED}; margin-left:8px;")
         tb_layout.addWidget(self._clock)
 
         main_layout.addWidget(topbar)
 
         cmdbar = QWidget()
         cmdbar.setFixedHeight(38)
-        cmdbar.setStyleSheet(f'background:{BG}; border-bottom:1px solid {BORDER};')
+        cmdbar.setStyleSheet(f"background:{BG}; border-bottom:1px solid {BORDER};")
         cb_layout = QHBoxLayout(cmdbar)
         cb_layout.setContentsMargins(12, 0, 12, 0)
 
-        mode_label = QLabel('MODE')
-        mode_label.setStyleSheet(f'color:{MUTED}; font-size:11px; margin-right:4px;')
+        mode_label = QLabel("MODE")
+        mode_label.setStyleSheet(f"color:{MUTED}; font-size:11px; margin-right:4px;")
         cb_layout.addWidget(mode_label)
 
         self._mode_buttons = {}
-        for mode_val, mode_name in [(-1, 'IDLE'), (0, 'CTRL'), (1, 'NAV'), (2, 'REMOTE')]:
+        for mode_val, mode_name in [
+            (-1, "IDLE"),
+            (0, "CTRL"),
+            (1, "NAV"),
+            (2, "REMOTE"),
+        ]:
             btn = QPushButton(mode_name)
             btn.setStyleSheet(self._mode_btn_style(False))
             btn.clicked.connect(lambda checked, m=mode_val: self._on_mode_click(m))
@@ -120,10 +136,10 @@ class MainWindow(QMainWindow):
 
         cb_layout.addStretch()
 
-        self._estop_btn = QPushButton('\u25A0 E-STOP')
+        self._estop_btn = QPushButton("\u25a0 E-STOP")
         self._estop_btn.setStyleSheet(
-            f'color:{RED}; border:1px solid {RED}; padding:3px 18px;'
-            f'font-size:12px; font-weight:bold; background:transparent; border-radius:3px;'
+            f"color:{RED}; border:1px solid {RED}; padding:3px 18px;"
+            f"font-size:12px; font-weight:bold; background:transparent; border-radius:3px;"
         )
         self._estop_btn.clicked.connect(self._on_estop_click)
         cb_layout.addWidget(self._estop_btn)
@@ -136,17 +152,17 @@ class MainWindow(QMainWindow):
         content_layout.setSpacing(0)
 
         self.video_widget = VideoWidget(
-            codec=cfg.get('video_codec', 'h264'),
-            hw_accel=cfg.get('hw_accel', True),
+            codec=cfg.get("video_codec", "h264"),
+            hw_accel=cfg.get("hw_accel", True),
         )
         content_layout.addWidget(self.video_widget, stretch=1)
 
         separator = QWidget()
         separator.setFixedWidth(1)
-        separator.setStyleSheet(f'background:{BORDER};')
+        separator.setStyleSheet(f"background:{BORDER};")
         content_layout.addWidget(separator)
 
-        self.telemetry_panel = TelemetryPanel()
+        self.telemetry_panel = TelemetryPanel(state=self._state)
         content_layout.addWidget(self.telemetry_panel, stretch=0)
 
         main_layout.addWidget(content, stretch=1)
@@ -163,62 +179,100 @@ class MainWindow(QMainWindow):
         self.telemetry_panel.telemetry_updated.connect(self._on_telemetry_raw)
 
     def start(self):
-        self.video_widget.start(self._session)
-        self.telemetry_panel.start(self._session)
-        logger.info('MainWindow started')
+        self.video_widget.start(self._session, self._vehicle_id)
+        self.telemetry_panel.start(self._session, self._vehicle_id)
+        logger.info("MainWindow started")
 
     def stop(self):
         self._clock_timer.stop()
         self._stats_timer.stop()
         self.video_widget.stop()
         self.telemetry_panel.stop()
-        logger.info('MainWindow stopped')
+        logger.info("MainWindow stopped")
 
     def _update_clock(self):
-        self._clock.setText(time.strftime('%H:%M:%S'))
+        self._clock.setText(time.strftime("%H:%M:%S"))
 
     def _update_stats(self):
         stats = self.video_widget.get_stats()
         self.telemetry_panel.update_video_stats(stats)
         if self._client:
-            self.telemetry_panel.update_rtt(self._client.rtt_client_server_ms)
+            self.telemetry_panel.update_rtt(
+                self._client.rtt_client_server_ms,
+                self._client.rtt_client_bot_ms,
+            )
+
+        # Connection state check
+        tele_age = (
+            (time.monotonic() - self._last_telemetry_time)
+            if self._last_telemetry_time > 0
+            else -1
+        )
+        video_age = self.video_widget.last_frame_age()
+        tele_ok = 0 < tele_age < 3.0
+        video_ok = 0 < video_age < 3.0
+
+        if not tele_ok and self._server_connected:
+            self._server_connected = False
+            logger.warning("Server disconnected (no telemetry)")
+            self._badge_veh.set_state("error")
+        elif tele_ok and not self._server_connected:
+            self._server_connected = True
+            logger.info("Server connected")
+
+        self._badge_srv.set_state("ok" if self._server_connected else "error")
+        self.telemetry_panel.update_connection(tele_ok, video_ok)
 
     def _on_telemetry_raw(self, raw: str):
         import json
+
         s = json.loads(raw)
         self._last_state = s
+        self._last_telemetry_time = time.monotonic()
+        if not self._server_connected:
+            self._server_connected = True
+            logger.info("Server connected")
 
-        robot_age = s.get('robot_age', -1)
+        vid = str(self._vehicle_id)
+        vehicles = s.get("vehicles", {})
+        veh = vehicles.get(vid, {})
+
+        robot_age = veh.get("robot_age", -1)
         if robot_age < 0:
-            self._badge_veh.set_state('off')
+            self._badge_veh.set_state("off")
         elif robot_age < 2:
-            self._badge_veh.set_state('ok')
+            self._badge_veh.set_state("ok")
         else:
-            self._badge_veh.set_state('error', f'VEH {robot_age:.0f}s')
+            self._badge_veh.set_state("error", f"VEH {robot_age:.0f}s")
 
-        self._badge_stas.set_state('ok' if s.get('station_connected', False) else 'error')
-        ctrl = s.get('control', {})
-        self._badge_joy.set_state('ok' if ctrl.get('joystick_connected', False) else 'off')
-        self._badge_rem.set_state('ok' if s.get('remote_enabled', False) else 'off')
+        self._badge_stas.set_state(
+            "ok" if s.get("station_connected", False) else "error"
+        )
+        ctrl = s.get("control", {})
+        self._badge_joy.set_state(
+            "ok" if ctrl.get("joystick_connected", False) else "off"
+        )
 
-        active_mode = s.get('mux', {}).get('requested_mode', -1)
-        station_on = s.get('station_connected', False)
+        active_mode = veh.get("mux", {}).get("requested_mode", -1)
+        station_on = s.get("station_connected", False)
         for mode_val, btn in self._mode_buttons.items():
-            is_active = (mode_val == active_mode)
+            is_active = mode_val == active_mode
             btn.setStyleSheet(self._mode_btn_style(is_active, not station_on))
 
-        estop_active = ctrl.get('estop', False) or s.get('estop', {}).get('is_estop', False)
+        estop_active = ctrl.get("estop", False) or s.get("estop", {}).get(
+            "is_estop", False
+        )
         if estop_active:
-            self._estop_btn.setText('\u25A0 RELEASE')
+            self._estop_btn.setText("\u25a0 RELEASE")
             self._estop_btn.setStyleSheet(
-                f'color:#fff; border:1px solid {RED}; padding:3px 18px;'
-                f'font-size:12px; font-weight:bold; background:{RED}; border-radius:3px;'
+                f"color:#fff; border:1px solid {RED}; padding:3px 18px;"
+                f"font-size:12px; font-weight:bold; background:{RED}; border-radius:3px;"
             )
         else:
-            self._estop_btn.setText('\u25A0 E-STOP')
+            self._estop_btn.setText("\u25a0 E-STOP")
             self._estop_btn.setStyleSheet(
-                f'color:{RED}; border:1px solid {RED}; padding:3px 18px;'
-                f'font-size:12px; font-weight:bold; background:transparent; border-radius:3px;'
+                f"color:{RED}; border:1px solid {RED}; padding:3px 18px;"
+                f"font-size:12px; font-weight:bold; background:transparent; border-radius:3px;"
             )
 
     def _on_mode_click(self, mode: int):
@@ -227,20 +281,20 @@ class MainWindow(QMainWindow):
 
     def _on_estop_click(self):
         if self._client:
-            ctrl = self._last_state.get('control', {})
-            active = not ctrl.get('estop', False)
+            ctrl = self._last_state.get("control", {})
+            active = not ctrl.get("estop", False)
             self._client.send_estop(active)
 
     def _mode_btn_style(self, active=False, disabled=False):
         if active:
             return (
-                f'background:rgba(88,166,255,0.12); color:#fff; border:1px solid {BLUE};'
-                f'font-size:11px; padding:3px 10px; border-radius:3px;'
+                f"background:rgba(88,166,255,0.12); color:#fff; border:1px solid {BLUE};"
+                f"font-size:11px; padding:3px 10px; border-radius:3px;"
             )
-        opacity = 'opacity:0.4;' if disabled else ''
+        opacity = "opacity:0.4;" if disabled else ""
         return (
-            f'background:transparent; color:{MUTED}; border:1px solid {BORDER2};'
-            f'font-size:11px; padding:3px 10px; border-radius:3px; {opacity}'
+            f"background:transparent; color:{MUTED}; border:1px solid {BORDER2};"
+            f"font-size:11px; padding:3px 10px; border-radius:3px; {opacity}"
         )
 
     def closeEvent(self, event):

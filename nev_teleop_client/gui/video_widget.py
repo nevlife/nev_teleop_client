@@ -4,8 +4,9 @@ import threading
 import time
 
 import gi
-gi.require_version('Gst', '1.0')
-gi.require_version('GstVideo', '1.0')
+
+gi.require_version("Gst", "1.0")
+gi.require_version("GstVideo", "1.0")
 from gi.repository import Gst, GLib
 
 import zenoh
@@ -15,19 +16,19 @@ from PySide6.QtWidgets import QWidget, QVBoxLayout, QLabel
 
 logger = logging.getLogger(__name__)
 
-RELAY_HEADER_FMT  = 'dfdf'
+RELAY_HEADER_FMT = "dfdf"
 RELAY_HEADER_SIZE = struct.calcsize(RELAY_HEADER_FMT)
 
 
 def _ms(a: float, b: float) -> str:
-    return f'{(b - a) * 1000:.1f}ms'
+    return f"{(b - a) * 1000:.1f}ms"
 
 
 class VideoWidget(QWidget):
 
     frame_ready = Signal(bytes, int, int)
 
-    def __init__(self, codec='h264', hw_accel=True, parent=None):
+    def __init__(self, codec="h264", hw_accel=True, parent=None):
         super().__init__(parent)
         self._pipeline = None
         self._appsrc = None
@@ -51,13 +52,14 @@ class VideoWidget(QWidget):
         self._fps = 0.0
         self._decode_max_ms = 0.0
         self._render_max_ms = 0.0
+        self._last_frame_time = 0.0
 
         self._decode_pts_map = {}
         self._decode_pts_seq = 0
 
         self._label = QLabel()
         self._label.setAlignment(Qt.AlignmentFlag.AlignCenter)
-        self._label.setStyleSheet('background-color: #1a1a2e;')
+        self._label.setStyleSheet("background-color: #1a1a2e;")
         self._label.setMinimumSize(640, 480)
 
         layout = QVBoxLayout(self)
@@ -68,11 +70,13 @@ class VideoWidget(QWidget):
 
         Gst.init(None)
 
-    def start(self, session: zenoh.Session):
-        self._sub = session.declare_subscriber('nev/gcs/camera', self._on_camera)
+    def start(self, session: zenoh.Session, vehicle_id: int = 0):
+        self._sub = session.declare_subscriber(
+            f"nev/gcs/{vehicle_id}/camera", self._on_camera
+        )
         self._init_pipeline(self._codec)
         self._running = True
-        logger.info(f'VideoWidget started (codec={self._codec})')
+        logger.info(f"VideoWidget started (codec={self._codec})")
 
     def stop(self):
         self._running = False
@@ -86,38 +90,38 @@ class VideoWidget(QWidget):
             self._codec = None
 
     def _init_pipeline(self, codec: str):
-        if codec == 'h264':
-            caps = 'video/x-h264,stream-format=byte-stream,alignment=au'
+        if codec == "h264":
+            caps = "video/x-h264,stream-format=byte-stream,alignment=au"
             if self._hw_accel:
-                parse_dec = 'h264parse ! nvh264dec max-display-delay=0 ! cudadownload'
+                parse_dec = "h264parse ! nvh264dec max-display-delay=0 ! cudadownload"
             else:
-                parse_dec = 'h264parse ! avdec_h264'
+                parse_dec = "h264parse ! avdec_h264"
         else:
-            caps = 'video/x-h265,stream-format=byte-stream,alignment=au'
+            caps = "video/x-h265,stream-format=byte-stream,alignment=au"
             if self._hw_accel:
-                parse_dec = 'h265parse ! nvh265dec max-display-delay=0 ! cudadownload'
+                parse_dec = "h265parse ! nvh265dec max-display-delay=0 ! cudadownload"
             else:
-                parse_dec = 'h265parse ! avdec_h265'
+                parse_dec = "h265parse ! avdec_h265"
 
         pipeline_str = (
-            f'appsrc name=src format=time is-live=true do-timestamp=false '
+            f"appsrc name=src format=time is-live=true do-timestamp=false "
             f'caps="{caps}" ! '
-            f'{parse_dec} ! '
-            f'videoconvert ! '
-            f'video/x-raw,format=RGB ! '
-            f'appsink name=sink drop=true max-buffers=1 sync=false emit-signals=true'
+            f"{parse_dec} ! "
+            f"videoconvert ! "
+            f"video/x-raw,format=RGB ! "
+            f"appsink name=sink drop=true max-buffers=1 sync=false emit-signals=true"
         )
         self._pipeline = Gst.parse_launch(pipeline_str)
-        dec_type = 'HW' if self._hw_accel else 'SW'
-        logger.info(f'{codec.upper()} decoder ({dec_type})')
+        dec_type = "HW" if self._hw_accel else "SW"
+        logger.info(f"{codec.upper()} decoder ({dec_type})")
 
-        self._appsrc = self._pipeline.get_by_name('src')
-        self._appsrc.set_property('max-bytes', 1024 * 512)
-        self._appsrc.set_property('block', False)
+        self._appsrc = self._pipeline.get_by_name("src")
+        self._appsrc.set_property("max-bytes", 1024 * 512)
+        self._appsrc.set_property("block", False)
 
-        sink = self._pipeline.get_by_name('sink')
-        sink.set_property('emit-signals', True)
-        sink.connect('new-sample', self._on_decoded_sample)
+        sink = self._pipeline.get_by_name("sink")
+        sink.set_property("emit-signals", True)
+        sink.connect("new-sample", self._on_decoded_sample)
 
         self._pipeline.set_state(Gst.State.PLAYING)
 
@@ -129,7 +133,9 @@ class VideoWidget(QWidget):
             if len(raw) <= RELAY_HEADER_SIZE:
                 return
             vehicle_ts, encode_ms, server_rx_ts, veh_to_srv_ms = struct.unpack_from(
-                RELAY_HEADER_FMT, raw, 0,
+                RELAY_HEADER_FMT,
+                raw,
+                0,
             )
             nal = raw[RELAY_HEADER_SIZE:]
 
@@ -139,6 +145,7 @@ class VideoWidget(QWidget):
             nal_len = len(nal)
             raw_len = len(raw)
             with self._lock:
+                self._last_frame_time = time.monotonic()
                 self._rx_bytes += raw_len
                 self._encode_ms = encode_ms
                 self._veh_to_srv_ms = veh_to_srv_ms
@@ -152,14 +159,14 @@ class VideoWidget(QWidget):
             buf = Gst.Buffer.new_wrapped(nal)
             buf.pts = pts_ns
             buf.dts = pts_ns
-            self._appsrc.emit('push-buffer', buf)
+            self._appsrc.emit("push-buffer", buf)
         except Exception as e:
-            logger.warning(f'Camera frame error: {e}')
+            logger.warning(f"Camera frame error: {e}")
 
     def _on_decoded_sample(self, sink):
         t0 = time.perf_counter()
 
-        sample = sink.emit('pull-sample')
+        sample = sink.emit("pull-sample")
         if not isinstance(sample, Gst.Sample):
             return Gst.FlowReturn.OK
 
@@ -171,13 +178,13 @@ class VideoWidget(QWidget):
         if push_time is not None:
             decode_ms = (t0 - push_time) * 1000.0
         if len(self._decode_pts_map) > 30:
-            oldest_keys = sorted(self._decode_pts_map)[:len(self._decode_pts_map) - 10]
+            oldest_keys = sorted(self._decode_pts_map)[: len(self._decode_pts_map) - 10]
             for k in oldest_keys:
                 del self._decode_pts_map[k]
         caps = sample.get_caps()
         struct_ = caps.get_structure(0)
-        width = struct_.get_value('width')
-        height = struct_.get_value('height')
+        width = struct_.get_value("width")
+        height = struct_.get_value("height")
 
         ok, map_info = buf.map(Gst.MapFlags.READ)
         if ok:
@@ -194,7 +201,7 @@ class VideoWidget(QWidget):
                 self.frame_ready.emit(data, width, height)
                 t3 = time.perf_counter()
                 logger.debug(
-                    f'[decode] dec={decode_ms:.1f}ms pull={_ms(t0,t1)} copy={_ms(t1,t2)} emit={_ms(t2,t3)} total={_ms(t0,t3)}'
+                    f"[decode] dec={decode_ms:.1f}ms pull={_ms(t0,t1)} copy={_ms(t1,t2)} emit={_ms(t2,t3)} total={_ms(t0,t3)}"
                 )
             finally:
                 buf.unmap(map_info)
@@ -220,8 +227,14 @@ class VideoWidget(QWidget):
             if render_ms > self._render_max_ms:
                 self._render_max_ms = render_ms
         logger.debug(
-            f'[render] qimage={_ms(t0,t1)} pixmap={_ms(t1,t2)} scale={_ms(t2,t3)} set={_ms(t3,t4)} total={_ms(t0,t4)}'
+            f"[render] qimage={_ms(t0,t1)} pixmap={_ms(t1,t2)} scale={_ms(t2,t3)} set={_ms(t3,t4)} total={_ms(t0,t4)}"
         )
+
+    def last_frame_age(self) -> float:
+        with self._lock:
+            if self._last_frame_time <= 0:
+                return -1.0
+            return time.monotonic() - self._last_frame_time
 
     def get_stats(self) -> dict:
         now = time.time()
@@ -231,22 +244,24 @@ class VideoWidget(QWidget):
                 self._bw_mbps = round(self._rx_bytes * 8 / (dt * 1e6), 3)
                 self._fps = round(self._frame_count / dt, 1)
             if self._frame_size_count > 0:
-                self._frame_size_avg = round(self._frame_size_sum / self._frame_size_count)
+                self._frame_size_avg = round(
+                    self._frame_size_sum / self._frame_size_count
+                )
             self._rx_bytes = 0
             self._frame_count = 0
             self._frame_size_sum = 0
             self._frame_size_count = 0
             self._last_stats_time = now
             stats = {
-                'bw_mbps': self._bw_mbps,
-                'fps': self._fps,
-                'encode_ms': self._encode_ms,
-                'veh_to_srv_ms': self._veh_to_srv_ms,
-                'srv_to_cli_ms': round(self._srv_to_cli_ms, 1),
-                'decode_ms': round(self._decode_ms, 1),
-                'decode_max_ms': round(self._decode_max_ms, 1),
-                'render_max_ms': round(self._render_max_ms, 1),
-                'frame_size': self._frame_size_avg,
+                "bw_mbps": self._bw_mbps,
+                "fps": self._fps,
+                "encode_ms": self._encode_ms,
+                "veh_to_srv_ms": self._veh_to_srv_ms,
+                "srv_to_cli_ms": round(self._srv_to_cli_ms, 1),
+                "decode_ms": round(self._decode_ms, 1),
+                "decode_max_ms": round(self._decode_max_ms, 1),
+                "render_max_ms": round(self._render_max_ms, 1),
+                "frame_size": self._frame_size_avg,
             }
             self._decode_max_ms = 0.0
             self._render_max_ms = 0.0

@@ -24,7 +24,7 @@ class Controller(ABC):
     def start(self):
         self._stop_event.clear()
         self._setup()
-        logger.info(f'{self.name()} controller started')
+        logger.info(f"{self.name()} controller started")
         try:
             while not self._stop_event.is_set():
                 self.state.controller_connected = self.poll()
@@ -37,12 +37,10 @@ class Controller(ABC):
         self._stop_event.set()
 
     @abstractmethod
-    def name(self) -> str:
-        ...
+    def name(self) -> str: ...
 
     @abstractmethod
-    def poll(self) -> bool:
-        ...
+    def poll(self) -> bool: ...
 
     def on_disconnect(self):
         self.state.reset_control(connected=False)

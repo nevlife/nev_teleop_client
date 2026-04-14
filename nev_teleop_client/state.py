@@ -6,10 +6,10 @@ class StationState:
 
     def __init__(self):
         self._lock = threading.Lock()
-        self._linear_x:             float = 0.0
-        self._steer_angle:          float = 0.0
-        self._estop:                bool  = False
-        self._controller_connected: bool  = False
+        self._linear_x: float = 0.0
+        self._steer_angle: float = 0.0
+        self._estop: bool = False
+        self._controller_connected: bool = False
 
     @property
     def linear_x(self) -> float:
