@@ -120,7 +120,7 @@ class TelemetryPanel(QWidget):
 
         self._cards = {}
         for name in [
-            "VEHICLE",
+            "SPEED",
             "MUX",
             "NETWORK",
             "TWIST",
@@ -211,7 +211,7 @@ class TelemetryPanel(QWidget):
             vehicles = s.get("vehicles", {})
             veh = vehicles.get(vid, {})
 
-            self._render_vehicle(veh.get("vehicle", {}))
+            self._render_speed(veh.get("twist", {}))
             self._render_mux(veh.get("mux", {}))
             self._render_network(veh.get("network", {}))
             self._render_twist(veh.get("twist", {}))
@@ -226,25 +226,14 @@ class TelemetryPanel(QWidget):
         except Exception as e:
             logger.error(f"_refresh error: {e}", exc_info=True)
 
-    def _render_vehicle(self, vehicle: dict):
-        if not vehicle:
-            self._body("VEHICLE").setText(
-                f'<span style="color:{MUTED};">no data</span>'
-            )
-            return
-        html = ""
-        for subtopic, fields in vehicle.items():
-            html += f'<div style="line-height:1.6;color:{MUTED};font-weight:bold;">{subtopic.upper()}</div>'
-            if isinstance(fields, dict):
-                for key, val in fields.items():
-                    if key == "ts":
-                        continue
-                    if isinstance(val, float):
-                        html += _kv(key, f"{val:.3f}")
-                    else:
-                        html += _kv(key, str(val))
-            html += f'<div style="line-height:0.8;">&nbsp;</div>'
-        self._body("VEHICLE").setText(html)
+    def _render_speed(self, tv):
+        speed = tv.get("current_speed", 0)
+        steer = tv.get("current_steer_angle", 0)
+        steer_deg = math.degrees(steer) if steer != 0 else 0.0
+        self._body("SPEED").setText(
+            _kv("speed", f"{speed:.3f} m/s")
+            + _kv("steer", f"{steer_deg:.1f} deg ({steer:.4f} rad)")
+        )
 
     def _render_mux(self, mx):
         mode = mx.get("requested_mode", -1)
