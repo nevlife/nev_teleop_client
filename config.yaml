@@ -4,7 +4,7 @@ vehicle_id: 0
 # Video codec: h264 or h265
 video_codec: "h265"
 # Hardware decoding (NVIDIA): true=nvh264dec/nvh265dec, false=avdec_h264/avdec_h265
-hw_accel: false
+hw_accel: true
 
 heartbeat_rate: 5.0
 teleop_rate: 20.0

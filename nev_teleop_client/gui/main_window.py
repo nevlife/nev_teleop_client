@@ -136,6 +136,11 @@ class MainWindow(QMainWindow):
 
         cb_layout.addStretch()
 
+        self._split_btn = QPushButton("SPLIT")
+        self._split_btn.setCheckable(True)
+        self._split_btn.setStyleSheet(self._mode_btn_style(False))
+        cb_layout.addWidget(self._split_btn)
+
         self._estop_btn = QPushButton("\u25a0 E-STOP")
         self._estop_btn.setStyleSheet(
             f"color:{RED}; border:1px solid {RED}; padding:3px 18px;"
@@ -156,6 +161,9 @@ class MainWindow(QMainWindow):
             hw_accel=cfg.get("hw_accel", True),
         )
         content_layout.addWidget(self.video_widget, stretch=1)
+
+        self._split_btn.clicked.connect(self.video_widget.toggle_split)
+        self.video_widget.split_mode_changed.connect(self._on_split_changed)
 
         separator = QWidget()
         separator.setFixedWidth(1)
@@ -278,6 +286,10 @@ class MainWindow(QMainWindow):
     def _on_mode_click(self, mode: int):
         if self._client:
             self._client.send_cmd_mode(mode)
+
+    def _on_split_changed(self, active: bool):
+        self._split_btn.setChecked(active)
+        self._split_btn.setStyleSheet(self._mode_btn_style(active))
 
     def _on_estop_click(self):
         if self._client:

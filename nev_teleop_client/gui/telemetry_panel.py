@@ -2,12 +2,15 @@ import json
 import logging
 import math
 import threading
+import time
 
 import zenoh
-from PySide6.QtCore import Qt, Signal
+from PySide6.QtCore import Qt, Signal, QTimer, QPointF
+from PySide6.QtGui import QPainter, QColor, QPen
 from PySide6.QtWidgets import (
     QWidget,
     QVBoxLayout,
+    QHBoxLayout,
     QLabel,
     QScrollArea,
     QFrame,
@@ -88,6 +91,100 @@ def _bar(pct):
     )
 
 
+class WheelGauge(QWidget):
+
+    def __init__(self, parent=None):
+        super().__init__(parent)
+        self.setFixedSize(56, 56)
+        self._angle_deg = 0.0
+        self._rate = 0.0
+        self._last_tick = time.monotonic()
+        self._timer = QTimer(self)
+        self._timer.timeout.connect(self._tick)
+        self._timer.start(33)
+
+    def set_rate(self, rad_per_s: float):
+        self._rate = rad_per_s
+
+    def _tick(self):
+        now = time.monotonic()
+        dt = now - self._last_tick
+        self._last_tick = now
+        self._angle_deg = (
+            self._angle_deg + math.degrees(self._rate) * dt * 8.0
+        ) % 360.0
+        self.update()
+
+    def paintEvent(self, event):
+        p = QPainter(self)
+        p.setRenderHint(QPainter.RenderHint.Antialiasing)
+        cx = self.width() / 2
+        cy = self.height() / 2
+        r = min(cx, cy) - 3
+
+        p.setPen(QPen(QColor(BORDER), 2))
+        p.setBrush(Qt.BrushStyle.NoBrush)
+        p.drawEllipse(QPointF(cx, cy), r, r)
+
+        p.setPen(QPen(QColor(BLUE), 2))
+        for i in range(3):
+            a = math.radians(self._angle_deg + i * 120)
+            x = cx + r * 0.82 * math.cos(a)
+            y = cy + r * 0.82 * math.sin(a)
+            p.drawLine(QPointF(cx, cy), QPointF(x, y))
+
+        p.setPen(Qt.PenStyle.NoPen)
+        p.setBrush(QColor(BLUE))
+        p.drawEllipse(QPointF(cx, cy), 2.5, 2.5)
+        p.end()
+
+
+class SpeedCard(QFrame):
+
+    def __init__(self, parent=None):
+        super().__init__(parent)
+        self.setStyleSheet(f"background:{BG_CARD};")
+        layout = QVBoxLayout(self)
+        layout.setContentsMargins(10, 10, 10, 10)
+        layout.setSpacing(4)
+
+        title = QLabel("SPEED")
+        title.setStyleSheet(
+            f"font-size:10px;letter-spacing:1.5px;color:{MUTED};margin-bottom:2px;"
+        )
+        layout.addWidget(title)
+
+        row = QHBoxLayout()
+        row.setSpacing(8)
+
+        speed_box = QVBoxLayout()
+        speed_box.setSpacing(0)
+        self._speed_lbl = QLabel("+0.00")
+        self._speed_lbl.setStyleSheet(
+            f"font-size:28px;font-weight:bold;color:{TEXT};"
+        )
+        speed_box.addWidget(self._speed_lbl)
+        unit_lbl = QLabel("m/s")
+        unit_lbl.setStyleSheet(f"font-size:11px;color:{MUTED};")
+        speed_box.addWidget(unit_lbl)
+        row.addLayout(speed_box)
+        row.addStretch()
+
+        self._wheel = WheelGauge()
+        row.addWidget(self._wheel, 0, Qt.AlignmentFlag.AlignVCenter)
+
+        layout.addLayout(row)
+
+        self._rate_lbl = QLabel("+0.000 rad/s")
+        self._rate_lbl.setStyleSheet(f"font-size:11px;color:{MUTED};")
+        layout.addWidget(self._rate_lbl)
+
+    def update_values(self, lx: float, az: float):
+        self._speed_lbl.setText(f"{lx:+.2f}")
+        self._rate_lbl.setText(f"{az:+.3f} rad/s")
+        self._wheel.set_rate(az)
+
+
 class TelemetryPanel(QWidget):
 
     telemetry_updated = Signal(str)
@@ -119,8 +216,10 @@ class TelemetryPanel(QWidget):
         self._layout.setSpacing(1)
 
         self._cards = {}
+        speed_card = SpeedCard()
+        self._layout.addWidget(speed_card)
+        self._cards["SPEED"] = speed_card
         for name in [
-            "SPEED",
             "MUX",
             "NETWORK",
             "TWIST",
@@ -227,13 +326,9 @@ class TelemetryPanel(QWidget):
             logger.error(f"_refresh error: {e}", exc_info=True)
 
     def _render_speed(self, tv):
-        speed = tv.get("current_speed", 0)
-        steer = tv.get("current_steer_angle", 0)
-        steer_deg = math.degrees(steer) if steer != 0 else 0.0
-        self._body("SPEED").setText(
-            _kv("speed", f"{speed:.3f} m/s")
-            + _kv("steer", f"{steer_deg:.1f} deg ({steer:.4f} rad)")
-        )
+        lx = tv.get("final_lx", 0) or 0
+        az = tv.get("final_az", 0) or 0
+        self._cards["SPEED"].update_values(float(lx), float(az))
 
     def _render_mux(self, mx):
         mode = mx.get("requested_mode", -1)

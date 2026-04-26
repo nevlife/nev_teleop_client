@@ -24,9 +24,30 @@ def _ms(a: float, b: float) -> str:
     return f"{(b - a) * 1000:.1f}ms"
 
 
+class _SubVideoWindow(QWidget):
+
+    closed = Signal()
+
+    def __init__(self, title: str):
+        super().__init__(None, Qt.WindowType.Window)
+        self.setWindowTitle(title)
+        self.setMinimumSize(480, 360)
+        self.label = QLabel()
+        self.label.setAlignment(Qt.AlignmentFlag.AlignCenter)
+        self.label.setStyleSheet("background-color: #1a1a2e;")
+        layout = QVBoxLayout(self)
+        layout.setContentsMargins(0, 0, 0, 0)
+        layout.addWidget(self.label)
+
+    def closeEvent(self, event):
+        self.closed.emit()
+        super().closeEvent(event)
+
+
 class VideoWidget(QWidget):
 
     frame_ready = Signal(bytes, int, int)
+    split_mode_changed = Signal(bool)
 
     def __init__(self, codec="h264", hw_accel=True, parent=None):
         super().__init__(parent)
@@ -36,6 +57,10 @@ class VideoWidget(QWidget):
         self._running = False
         self._codec = codec
         self._hw_accel = hw_accel
+
+        self._split_mode = False
+        self._left_popup: "_SubVideoWindow | None" = None
+        self._right_popup: "_SubVideoWindow | None" = None
 
         self._lock = threading.Lock()
         self._rx_bytes = 0
@@ -80,6 +105,7 @@ class VideoWidget(QWidget):
 
     def stop(self):
         self._running = False
+        self.set_split_mode(False)
         if self._sub:
             self._sub.undeclare()
             self._sub = None
@@ -88,6 +114,38 @@ class VideoWidget(QWidget):
             self._pipeline = None
             self._appsrc = None
             self._codec = None
+
+    def toggle_split(self):
+        self.set_split_mode(not self._split_mode)
+
+    def set_split_mode(self, enable: bool):
+        if enable == self._split_mode:
+            return
+        self._split_mode = enable
+        if enable:
+            self._left_popup = _SubVideoWindow("VIDEO — LEFT")
+            self._right_popup = _SubVideoWindow("VIDEO — RIGHT")
+            self._left_popup.closed.connect(self._on_popup_closed)
+            self._right_popup.closed.connect(self._on_popup_closed)
+            self._left_popup.show()
+            self._right_popup.show()
+        else:
+            for popup in (self._left_popup, self._right_popup):
+                if popup is None:
+                    continue
+                try:
+                    popup.closed.disconnect(self._on_popup_closed)
+                except (RuntimeError, TypeError):
+                    pass
+                popup.close()
+                popup.deleteLater()
+            self._left_popup = None
+            self._right_popup = None
+        self.split_mode_changed.emit(enable)
+
+    def _on_popup_closed(self):
+        if self._split_mode:
+            self.set_split_mode(False)
 
     def _init_pipeline(self, codec: str):
         if codec == "h264":
@@ -211,24 +269,39 @@ class VideoWidget(QWidget):
     def _update_frame(self, data: bytes, width: int, height: int):
         t0 = time.perf_counter()
         img = QImage(data, width, height, width * 3, QImage.Format.Format_RGB888)
-        t1 = time.perf_counter()
-        pixmap = QPixmap.fromImage(img)
-        t2 = time.perf_counter()
-        scaled = pixmap.scaled(
-            self._label.size(),
-            Qt.AspectRatioMode.KeepAspectRatio,
-            Qt.TransformationMode.FastTransformation,
-        )
-        t3 = time.perf_counter()
-        self._label.setPixmap(scaled)
+
+        if (
+            self._split_mode
+            and self._left_popup is not None
+            and self._right_popup is not None
+            and width >= 3
+        ):
+            third = width // 3
+            left_pix = QPixmap.fromImage(img.copy(0, 0, third, height))
+            center_pix = QPixmap.fromImage(img.copy(third, 0, third, height))
+            right_pix = QPixmap.fromImage(
+                img.copy(third * 2, 0, width - third * 2, height)
+            )
+            self._apply_pixmap(self._label, center_pix)
+            self._apply_pixmap(self._left_popup.label, left_pix)
+            self._apply_pixmap(self._right_popup.label, right_pix)
+        else:
+            self._apply_pixmap(self._label, QPixmap.fromImage(img))
+
         t4 = time.perf_counter()
         render_ms = (t4 - t0) * 1000.0
         with self._lock:
             if render_ms > self._render_max_ms:
                 self._render_max_ms = render_ms
-        logger.debug(
-            f"[render] qimage={_ms(t0,t1)} pixmap={_ms(t1,t2)} scale={_ms(t2,t3)} set={_ms(t3,t4)} total={_ms(t0,t4)}"
+        logger.debug(f"[render] total={_ms(t0,t4)}")
+
+    def _apply_pixmap(self, label: QLabel, pixmap: QPixmap):
+        scaled = pixmap.scaled(
+            label.size(),
+            Qt.AspectRatioMode.KeepAspectRatio,
+            Qt.TransformationMode.FastTransformation,
         )
+        label.setPixmap(scaled)
 
     def last_frame_age(self) -> float:
         with self._lock:

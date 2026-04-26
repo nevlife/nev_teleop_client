@@ -108,6 +108,11 @@ joystick:
 - **연결 상태 표시**: 텔레메트리/영상 수신 경과 < 3초 → 정상, 배지 색상 결정
 - **JOYSTICK 패널**: 서버 telemetry가 아닌 로컬 StationState에서 직접 표시
 
+## 향후 추가 예정
+
+- **LiDAR 포인트클라우드 시각화**: Draco 압축 포인트클라우드 수신 및 3D 뷰 렌더링
+- **예상 경로 오버레이**: 현재 조향각 기반 차량 진행 경로를 영상 위에 시각화 (Bicycle kinematic model)
+
 ## 의존성
 
 - [eclipse-zenoh](https://zenoh.io/) 1.8.0
