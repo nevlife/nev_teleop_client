@@ -8,10 +8,28 @@ from PySide6.QtWidgets import (
     QMainWindow, QWidget, QHBoxLayout, QVBoxLayout, QLabel, QPushButton,
 )
 
-from .video_widget import VideoWidget
+from .video_grid import VideoGrid
 from .telemetry_panel import TelemetryPanel
 
 logger = logging.getLogger(__name__)
+
+
+def _resolve_vehicle_ids(cfg: dict) -> list[str]:
+    """Read vehicles list with single-vehicle_id fallback. Always non-empty."""
+    vehicles = cfg.get('vehicles')
+    if isinstance(vehicles, list) and vehicles:
+        ids = []
+        for entry in vehicles:
+            if isinstance(entry, dict) and 'id' in entry:
+                ids.append(str(entry['id']))
+            elif isinstance(entry, (str, int)):
+                ids.append(str(entry))
+        if ids:
+            return ids
+    single = cfg.get('vehicle_id')
+    if single is not None:
+        return [str(single)]
+    return ['0']
 
 BG       = '#0d1117'
 BG_CARD  = '#161b22'
@@ -135,15 +153,23 @@ class MainWindow(QMainWindow):
         content_layout.setContentsMargins(0, 0, 0, 0)
         content_layout.setSpacing(0)
 
-        self.video_widget = VideoWidget()
-        content_layout.addWidget(self.video_widget, stretch=1)
+        # Vehicle list: cfg['vehicles'] preferred, falls back to cfg['vehicle_id'].
+        # TODO: dynamic vehicle discovery — follow-up PR.
+        self._vehicle_ids = _resolve_vehicle_ids(cfg)
+        rtp_mode = bool(cfg.get('rtp_mode', False))
+
+        self.video_grid = VideoGrid(self._vehicle_ids, rtp_mode=rtp_mode)
+        content_layout.addWidget(self.video_grid, stretch=1)
 
         separator = QWidget()
         separator.setFixedWidth(1)
         separator.setStyleSheet(f'background:{BORDER};')
         content_layout.addWidget(separator)
 
-        self.telemetry_panel = TelemetryPanel()
+        # Telemetry panel shows a single (selected) vehicle for now.
+        # Vehicle selection UI is a follow-up PR.
+        self._selected_vehicle_id = self._vehicle_ids[0]
+        self.telemetry_panel = TelemetryPanel(vehicle_id=self._selected_vehicle_id)
         content_layout.addWidget(self.telemetry_panel, stretch=0)
 
         main_layout.addWidget(content, stretch=1)
@@ -160,14 +186,14 @@ class MainWindow(QMainWindow):
         self.telemetry_panel.telemetry_updated.connect(self._on_telemetry_raw)
 
     def start(self):
-        self.video_widget.start(self._session)
+        self.video_grid.start(self._session)
         self.telemetry_panel.start(self._session)
         logger.info('MainWindow started')
 
     def stop(self):
         self._clock_timer.stop()
         self._stats_timer.stop()
-        self.video_widget.stop()
+        self.video_grid.stop()
         self.telemetry_panel.stop()
         logger.info('MainWindow stopped')
 
@@ -175,7 +201,8 @@ class MainWindow(QMainWindow):
         self._clock.setText(time.strftime('%H:%M:%S'))
 
     def _update_stats(self):
-        stats = self.video_widget.get_stats()
+        # Telemetry panel currently mirrors the selected vehicle's video stats.
+        stats = self.video_grid.get_stats(self._selected_vehicle_id)
         self.telemetry_panel.update_video_stats(stats)
         if self._client:
             self.telemetry_panel.update_rtt(self._client.rtt_client_server_ms)

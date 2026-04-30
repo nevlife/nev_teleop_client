@@ -1,3 +1,4 @@
+import json
 import logging
 import struct
 import threading
@@ -27,12 +28,17 @@ class VideoWidget(QWidget):
 
     frame_ready = Signal(bytes, int, int)
 
-    def __init__(self, parent=None):
+    def __init__(self, parent=None, vehicle_id: str = '0', rtp_mode: bool = False):
         super().__init__(parent)
+        self._vehicle_id = str(vehicle_id)
         self._pipeline = None
         self._appsrc = None
+        self._jitterbuffer = None
         self._sub = None
         self._running = False
+        # Opt-in: wrap payload as RTP and run through jitterbuffer/depay.
+        # When False, behavior is identical to the legacy raw-AU path.
+        self._rtp_mode = rtp_mode
 
         self._lock = threading.Lock()
         self._rx_bytes = 0
@@ -53,6 +59,11 @@ class VideoWidget(QWidget):
         self._decode_pts_map = {}
         self._decode_pts_seq = 0
 
+        # video_ctl signaling. Populated in start() once the Zenoh session is
+        # available. _last_pli_send rate-limits PLI requests to <= 5 Hz.
+        self._video_ctl_pub = None
+        self._last_pli_send: float = 0.0
+
         self._label = QLabel()
         self._label.setAlignment(Qt.AlignmentFlag.AlignCenter)
         self._label.setStyleSheet('background-color: #1a1a2e;')
@@ -66,37 +77,81 @@ class VideoWidget(QWidget):
 
         Gst.init(None)
 
+    @property
+    def vehicle_id(self) -> str:
+        return self._vehicle_id
+
     def start(self, session: zenoh.Session):
-        self._sub = session.declare_subscriber('nev/gcs/camera', self._on_camera)
+        key = f'nev/gcs/{self._vehicle_id}/camera'
+        self._sub = session.declare_subscriber(key, self._on_camera)
+        ctl_key = f'nev/station/{self._vehicle_id}/video_ctl'
+        self._video_ctl_pub = session.declare_publisher(
+            ctl_key,
+            reliability=zenoh.Reliability.RELIABLE,
+            congestion_control=zenoh.CongestionControl.BLOCK,
+            priority=zenoh.Priority.INTERACTIVE_HIGH,
+        )
         self._init_pipeline()
         self._running = True
-        logger.info('VideoWidget started')
+        logger.info('VideoWidget[%s] started, key=%s', self._vehicle_id, key)
 
     def stop(self):
         self._running = False
         if self._sub:
             self._sub.undeclare()
             self._sub = None
+        if self._video_ctl_pub:
+            try:
+                self._video_ctl_pub.undeclare()
+            except Exception:
+                pass
+            self._video_ctl_pub = None
         if self._pipeline:
             self._pipeline.set_state(Gst.State.NULL)
             self._pipeline = None
 
     def _init_pipeline(self):
-        pipeline_str = (
-            'appsrc name=src format=time is-live=true do-timestamp=false '
-            'caps="video/x-h265,stream-format=byte-stream,alignment=au" ! '
-            'h265parse ! '
-            'nvh265dec max-display-delay=0 ! '
-            'cudadownload ! '
-            'videoconvert ! '
-            'video/x-raw,format=RGB ! '
-            'appsink name=sink drop=true max-buffers=1 sync=false emit-signals=true'
-        )
-        try:
-            self._pipeline = Gst.parse_launch(pipeline_str)
-            logger.info('Using NVIDIA hardware H.265 decoder (nvh265dec)')
-        except GLib.Error:
-            pipeline_str = (
+        if self._rtp_mode:
+            # RTP wire-format over Zenoh TCP. appsrc do-timestamp=true lets
+            # the jitterbuffer compute PTS from RTP timestamps.
+            rtp_caps = (
+                'application/x-rtp,media=video,encoding-name=H265,'
+                'clock-rate=90000,payload=96'
+            )
+            hw_str = (
+                'appsrc name=src format=time is-live=true do-timestamp=true '
+                f'caps="{rtp_caps}" ! '
+                'rtpjitterbuffer name=jbuf latency=80 mode=slave do-lost=true ! '
+                'rtph265depay ! '
+                'h265parse ! '
+                'video/x-h265,stream-format=byte-stream,alignment=au ! '
+                'nvh265dec max-display-delay=0 ! cudadownload ! videoconvert ! '
+                'video/x-raw,format=RGB ! '
+                'appsink name=sink drop=true max-buffers=1 sync=false emit-signals=true'
+            )
+            sw_str = (
+                'appsrc name=src format=time is-live=true do-timestamp=true '
+                f'caps="{rtp_caps}" ! '
+                'rtpjitterbuffer name=jbuf latency=80 mode=slave do-lost=true ! '
+                'rtph265depay ! '
+                'h265parse ! '
+                'video/x-h265,stream-format=byte-stream,alignment=au ! '
+                'avdec_h265 ! videoconvert ! '
+                'video/x-raw,format=RGB ! '
+                'appsink name=sink drop=true max-buffers=1 sync=false emit-signals=true'
+            )
+        else:
+            hw_str = (
+                'appsrc name=src format=time is-live=true do-timestamp=false '
+                'caps="video/x-h265,stream-format=byte-stream,alignment=au" ! '
+                'h265parse ! '
+                'nvh265dec max-display-delay=0 ! '
+                'cudadownload ! '
+                'videoconvert ! '
+                'video/x-raw,format=RGB ! '
+                'appsink name=sink drop=true max-buffers=1 sync=false emit-signals=true'
+            )
+            sw_str = (
                 'appsrc name=src format=time is-live=true do-timestamp=false '
                 'caps="video/x-h265,stream-format=byte-stream,alignment=au" ! '
                 'h265parse ! '
@@ -105,18 +160,46 @@ class VideoWidget(QWidget):
                 'video/x-raw,format=RGB ! '
                 'appsink name=sink drop=true max-buffers=1 sync=false emit-signals=true'
             )
-            self._pipeline = Gst.parse_launch(pipeline_str)
-            logger.info('Using software H.265 decoder (avdec_h265)')
+
+        try:
+            self._pipeline = Gst.parse_launch(hw_str)
+            logger.info('Using NVIDIA hardware H.265 decoder (nvh265dec) rtp=%s', self._rtp_mode)
+        except GLib.Error:
+            self._pipeline = Gst.parse_launch(sw_str)
+            logger.info('Using software H.265 decoder (avdec_h265) rtp=%s', self._rtp_mode)
 
         self._appsrc = self._pipeline.get_by_name('src')
         self._appsrc.set_property('max-bytes', 1024 * 512)
         self._appsrc.set_property('block', False)
+
+        if self._rtp_mode:
+            self._jitterbuffer = self._pipeline.get_by_name('jbuf')
+            if self._jitterbuffer is not None:
+                self._jitterbuffer.connect('on-lost-packet', self._on_rtp_lost)
 
         sink = self._pipeline.get_by_name('sink')
         sink.set_property('emit-signals', True)
         sink.connect('new-sample', self._on_decoded_sample)
 
         self._pipeline.set_state(Gst.State.PLAYING)
+
+    def _on_rtp_lost(self, jbuf, stats):
+        # Request a fresh keyframe from the bot when the jitterbuffer reports
+        # a lost packet. Rate-limited to one PLI per 200 ms to avoid storms.
+        logger.warning('RTP packet lost: %s', stats)
+        self._send_pli()
+
+    def _send_pli(self) -> None:
+        if self._video_ctl_pub is None:
+            return
+        now = time.monotonic()
+        if now - self._last_pli_send < 0.2:
+            return
+        self._last_pli_send = now
+        try:
+            self._video_ctl_pub.put(json.dumps({'type': 'pli'}))
+        except Exception as e:
+            logger.warning('PLI publish error: %s', e)
 
     def _on_camera(self, sample):
         if not self._running or not self._appsrc:
@@ -141,12 +224,17 @@ class VideoWidget(QWidget):
                 self._frame_size_sum += nal_len
                 self._frame_size_count += 1
 
-            self._decode_pts_seq += 1
-            pts_ns = self._decode_pts_seq * 66_666_667
-            self._decode_pts_map[pts_ns] = time.perf_counter()
             buf = Gst.Buffer.new_wrapped(nal)
-            buf.pts = pts_ns
-            buf.dts = pts_ns
+            if self._rtp_mode:
+                # appsrc do-timestamp=true assigns PTS; jitterbuffer owns ordering.
+                # Decode-latency tracking via _decode_pts_map is disabled here.
+                pass
+            else:
+                self._decode_pts_seq += 1
+                pts_ns = self._decode_pts_seq * 66_666_667
+                self._decode_pts_map[pts_ns] = time.perf_counter()
+                buf.pts = pts_ns
+                buf.dts = pts_ns
             self._appsrc.emit('push-buffer', buf)
         except Exception as e:
             logger.warning(f'Camera frame error: {e}')

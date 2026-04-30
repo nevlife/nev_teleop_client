@@ -82,8 +82,9 @@ class TelemetryPanel(QWidget):
 
     telemetry_updated = Signal(str)
 
-    def __init__(self, parent=None):
+    def __init__(self, parent=None, vehicle_id: str = '0'):
         super().__init__(parent)
+        self._vehicle_id = str(vehicle_id)
         self._sub = None
         self.setFixedWidth(340)
 
@@ -145,9 +146,10 @@ class TelemetryPanel(QWidget):
         return self._cards[name].findChild(QLabel, f'body_{name}')
 
     def start(self, session: zenoh.Session):
-        self._sub = session.declare_subscriber('nev/gcs/telemetry', self._on_telemetry)
+        key = f'nev/gcs/{self._vehicle_id}/telemetry'
+        self._sub = session.declare_subscriber(key, self._on_telemetry)
         self._body('ALERTS').setText('<span style="color:#3fb950;">Panel OK</span>')
-        logger.info('TelemetryPanel started')
+        logger.info('TelemetryPanel[%s] started, key=%s', self._vehicle_id, key)
 
     def stop(self):
         if self._sub:

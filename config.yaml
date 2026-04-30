@@ -4,6 +4,20 @@ heartbeat_rate: 5.0
 teleop_rate: 20.0
 ping_rate: 1.0
 
+# Opt-in: wrap H.265 in RTP and run through jitterbuffer/depay.
+# Transport remains Zenoh TCP; RTP is wire-format only.
+rtp_mode: false
+
+# Vehicles to display in the video grid. Each entry produces one tile that
+# subscribes to nev/gcs/{id}/camera and nev/gcs/{id}/telemetry.
+# Fallback: if `vehicles` is missing, the single `vehicle_id` below is used
+# (1x1 grid). If both are missing, defaults to vehicle_id "0".
+# TODO: dynamic discovery (server announces live vehicles) — follow-up PR.
+vehicles:
+  - id: "0"
+  - id: "1"
+# vehicle_id: "0"
+
 controller_type: joystick
 
 joystick:
